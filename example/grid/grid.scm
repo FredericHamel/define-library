@@ -1,7 +1,7 @@
 
 (define-library (example grid)
-  (export make rows cols ref each put!
-          #;(rename put! set!)) ; Rename fail due to macro as variable.
+  (export make rows cols ref each
+          (rename put! set!))
 
   (import (scheme base))
 

@@ -3,7 +3,7 @@
   
   (export life)
 
-  (import (except (scheme base) when)
+  (import (except (scheme base) when set!) ;; when not implemented in gambit.
           (only (scheme thread) thread-sleep!)
           (only (when-unless) when)
           (scheme write)
@@ -38,6 +38,8 @@
               (when (= j (- (cols grid) 1))
                 (newline)))))
     (define (life grid iterations #!optional (step-duration 1))
+      (life-print grid)
+      (thread-sleep! step-duration)
       (do ((i 0 (+ i 1))
            (grid0 grid grid1)
            (grid1 (make (rows grid) (cols grid))
@@ -46,6 +48,6 @@
         (each grid0
           (lambda (j k v)
             (let ((a (life-alive? grid0 j k)))
-              (put! grid1 j k a))))
+              (set! grid1 j k a))))
         (life-print grid1)
         (thread-sleep! step-duration)))))
