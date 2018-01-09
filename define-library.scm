@@ -746,7 +746,7 @@
                    ,@(map (lambda (i)
                             (if (eq? (car i) (cdr i))
                               (car i)
-                              (list (cdr i) (car i))))
+                              (list (car i) (cdr i))))
                           (idmap-map idmap))))
 
                 ;; Macro Handler !!!
