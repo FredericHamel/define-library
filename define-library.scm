@@ -59,7 +59,6 @@
   id: idmap
   (src unprintable:)
   (name-src unprintable:)
-  (path unprintable:)
   name
   namespace
   macros
@@ -85,18 +84,43 @@
               (string=? (substring str 0 len-prefix) prefix)
               (substring str len-prefix len-str)))))
 
+(define (start-width? str prefix)
+  (and (string? str)
+       (string? prefix)
+       (let ((len-str (string-length str))
+             (len-prefix (string-length prefix)))
+         (and (>= len-str len-prefix)
+              (string=? (substring str 0 len-prefix) prefix)
+              prefix))))
+
+(define (unsafe-string-remove-prefix str prefix)
+  (let ((len-str (##string-length str))
+        (len-prefix (##string-length prefix)))
+    (##substring str len-prefix len-str)))
+  
+
 (define (repo->parts repo)
   (and (symbol? repo)
        (let* ((repo-str (symbol->string repo))
-              (rest (or (has-prefix? repo-str "http://")
-                        (has-prefix? repo-str "https://"))))
+              (proto (or (start-width? repo-str "https://")
+                         (start-width? repo-str "https://")))
+              (rest (and proto
+                         (unsafe-string-remove-prefix
+                           repo-str proto))))
          (and rest
               (call-with-input-string
                   rest
-                  (lambda (p) (read-all p (lambda (p) (read-line p #\/)))))))))
+                  (lambda (p) (cons
+                                proto
+                                (read-all p (lambda (p) (read-line p #\/))))))))))
 
 (define (get-libdef name reference-src)
-  (let loop1 ((dirs library-locations))
+  (let* ((has-repo? (let ((fst (car name)))
+                      (or (and (string=? fst "http://") "http://")
+                          (and (string=? fst "https://") "https://"))))
+         (module-name (if has-repo? (cdr name) name)))
+
+  (let loop1 ((dirs (get-library-locations)))
     (if (not (pair? dirs))
 
         (##raise-expression-parsing-exception
@@ -119,7 +143,7 @@
                            (##path-normalize relative-to-path))
                           (##current-directory)))))
                (partial-path
-                (parts->path name dir)))
+                (parts->path module-name dir)))
           (let loop2 ((kinds library-kinds)) ; loop through library kind
             (if (not (pair? kinds))
                 (loop1 (cdr dirs)) ; next dirs
@@ -134,10 +158,9 @@
                               #f)
                             (lambda ()
                               (open-input-file path)))))
+                      (println "module-path: " partial-path)
                       (and port
-                           (vector
-                             path
-                             (read-libdef name reference-src port)))))
+                           (read-libdef name reference-src port))))
 
                   (or (try-path
                        (string-append (path-expand
@@ -147,7 +170,7 @@
                       (try-path
                        (string-append partial-path
                                       ext))
-                      (loop2 (cdr kinds))))))))))
+                      (loop2 (cdr kinds)))))))))))
 
 (define (read-first port)
   (let* ((rt
@@ -167,10 +190,23 @@
   (parse-define-library (read-first port)))
 
 (define library-locations #f)
-(set! library-locations
+#;(set! library-locations
       (list #f        ;; #f means relative to source file
             ""        ;; "" means current directory
             "~~lib")) ;; lib directory in Gambit installation directory
+
+(define (get-library-locations)
+  (or library-locations
+    (let ((r7rs-library-path (getenv "R7RS_LIBRARY_LOCATION" #f)))
+      (set! library-locations
+        (if r7rs-library-path
+          (list r7rs-library-path "")
+          (list "")))
+      library-locations)))
+        
+    
+    
+
 
 (define library-kinds #f)
 (set! library-kinds
@@ -519,8 +555,6 @@
                 (make-idmap
                  (ctx-src ctx)
                  (ctx-name-src ctx)
-                 (vector-ref
-                   (##source-locat ctxsrc) 0)
                  (ctx-name ctx)
                  (ctx-namespace ctx)
                  macros
@@ -557,7 +591,6 @@
                             (make-idmap
                               import-set-src
                               (idmap-name-src idmap)
-                              (idmap-path idmap)
                               (idmap-name idmap)
                               (idmap-namespace idmap)
                               (idmap-macros idmap)
@@ -607,7 +640,6 @@
                        (make-idmap
                          import-set-src
                          (idmap-name-src idmap)
-                         (idmap-path idmap)
                          (idmap-name idmap)
                          (idmap-namespace idmap)
                          (idmap-macros idmap)
@@ -641,7 +673,6 @@
                     (make-idmap
                       import-set-src
                       (idmap-name-src idmap)
-                      (idmap-path idmap)
                       (idmap-name idmap)
                       (idmap-namespace idmap)
                       (keep only-keep (idmap-macros idmap))
@@ -651,14 +682,13 @@
                    (parse-name import-set-src))
                  (name-with-symbols
                    (map string->symbol name))
-                 (path-ld
+                 (ld
                    (get-libdef name import-set-src))
-                 (path (vector-ref path-ld 0))
-                 (ld (vector-ref path-ld 1)))
+                 #;(path (vector-ref path-ld 0))
+                 #;(ld (vector-ref path-ld 1)))
             (make-idmap
               import-set-src
               import-set-src
-              path
               name
               (libdef-namespace ld)
               (idmap-macros (libdef-exports ld))
@@ -674,8 +704,8 @@
                          (imports (vector-ref x 1)))
                     `(##begin
 
-                      #;(##require-module
-                          ,(path-strip-extension (idmap-path idmap)))
+                      (##require-module
+                          ,(parts->path (idmap-name idmap) ""))
 
                       ,@(if (null? imports)
                           '()
@@ -738,7 +768,7 @@
 
                 ;; Imports dynamic (for functions)
                 (##require-module
-                 ,(path-strip-extension (idmap-path idmap)))
+                 ,(parts->path (idmap-name idmap) ""))
 
 
                 (##namespace
