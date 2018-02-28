@@ -4,3 +4,6 @@
 [submodule "package"]
 	path = package
 	url = https://muon.ddns.net:3000/gambit/package.git
+[submodule "git-scheme"]
+	path = git-scheme
+	url = https://muon.ddns.net:3000/gambit/git-scheme.git
