@@ -1,0 +1,2 @@
+#!/usr/bin/sh
+gsi-script -e '(##load "~~lib/define-library" (lambda (script-path script-name) #f) #t #f #t)' $@
