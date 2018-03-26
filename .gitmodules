@@ -6,4 +6,4 @@
 	url = https://muon.ddns.net:3000/gambit/git-scheme.git
 [submodule "package"]
 	path = package
-	url = https://muon.ddns.net:3000/gambit/package.git
+	url = https://github.com/FredericHamel/package.git
