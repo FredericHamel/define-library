@@ -1,6 +1,6 @@
 [submodule "version"]
 	path = version
-	url = https://github.com/gambit/version.git
+	url = https://github.com/FredericHamel/version.git
 [submodule "git-scheme"]
 	path = git-scheme
 	url = https://github.com/FredericHamel/git-scheme.git
