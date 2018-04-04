@@ -17,6 +17,26 @@
 (##include "syntax.scm")
 (##include "syntaxrulesxform.scm")
 
+;;; Syntax cons-expand (cons-expand %1 %2 %3)
+;; (cons %1 (cons %2 (cons %3 '())))
+(define-macro (cons-expand expr . expr*)
+  (define (expand expr rest)
+    (if (pair? rest)
+      `(cons
+         ,expr
+         ,(expand (car rest) (cdr rest)))
+      `(cons ,expr '())))
+  (expand expr expr*))
+
+#;(define-syntax cons-expand
+  (syntax-rules ()
+    ((_ expr)
+     expr)
+    ((_ expr expr* ...)
+     (cons
+       expr
+       (cons-expand expr* ...)))))
+
 (define-runtime-syntax define-syntax
   (lambda (src)
     (let ((locat (##source-locat src)))
@@ -97,80 +117,96 @@
   (let ((len-str (##string-length str))
         (len-prefix (##string-length prefix)))
     (##substring str len-prefix len-str)))
-  
+
 
 (define (repo->parts repo)
   (and (symbol? repo)
-       (let* ((repo-str (symbol->string repo))
-              (proto (or (start-width? repo-str "https://")
-                         (start-width? repo-str "https://")))
-              (rest (and proto
-                         (unsafe-string-remove-prefix
-                           repo-str proto))))
-         (and rest
-              (call-with-input-string
-                  rest
-                  (lambda (p) (cons
-                                proto
-                                (read-all p (lambda (p) (read-line p #\/))))))))))
+       (let* ((repo-str (symbol->string repo)))
+         (call-with-input-string
+           repo-str
+           (lambda (p)
+             (let ((fst (read-line p #\/)))
+               (if (or (string=? fst "http:")
+                       (string=? fst "https:"))
+                 (if (not (char=? (read-char p) #\/))
+                   (error "Invalid import name")))
+               (cons
+                 fst
+                 (read-all p (lambda (p) (read-line p #\/))))))))))
 
 (define (get-libdef name reference-src)
   (let* ((has-repo? (let ((fst (car name)))
-                      (or (and (string=? fst "http://") "http://")
-                          (and (string=? fst "https://") "https://"))))
+                      (and
+                        (or (string=? fst "http:")
+                            (string=? fst "https:"))
+                        fst)))
          (module-name (if has-repo? (cdr name) name)))
 
-  (let loop1 ((dirs (get-library-locations)))
-    (if (not (pair? dirs))
+    (define (try-path path)
+      (let loop ((kinds library-kinds))
+        (and (pair? kinds)
+             (let* ((x (car kinds))
+                    (ext (car x))
+                    (read-libdef (vector-ref (cdr x) 0)))
+               (let ((port (with-exception-catcher
+                             (lambda (exc)
+                               #f)
+                             (lambda ()
+                               (open-input-file (string-append path ext))))))
+                 (if port
+                   (read-libdef name reference-src port)
+                   (loop (cdr kinds))))))))
 
-        (##raise-expression-parsing-exception
-         'cannot-find-library
-         reference-src
-         (##desourcify reference-src))
+    (if has-repo?
+      ;; Need bootstraping
+      (let* ((module (package#url-parts->module-type has-repo? module-name "tree"))
+             (installed? (package#installed? module)))
+        (or
+          (and
+            installed?
+            (try-path (##path-expand
+                       (package#module-name module)
+                       installed?)))
+          ;; Could install it if does not require git-clone.
+          (##raise-expression-parsing-exception
+           'cannot-find-library
+           reference-src
+           (##desourcify reference-src))))
 
-        (let* ((dir
-                (if (car dirs)
-                    (path-expand (car dirs))
-                    (let* ((locat
-                            (and reference-src
-                                 (##source-locat reference-src)))
-                           (relative-to-path
-                            (and locat
-                                 (##container->path
-                                  (##locat-container locat)))))
-                      (if relative-to-path ;; should have a std function for this
-                          (##path-directory
-                           (##path-normalize relative-to-path))
-                          (##current-directory)))))
-               (partial-path
-                (parts->path module-name dir)))
-          (let loop2 ((kinds library-kinds)) ; loop through library kind
-            (if (not (pair? kinds))
-                (loop1 (cdr dirs)) ; next dirs
-                (let* ((x (car kinds))
-                       (ext (car x))
-                       (read-libdef (vector-ref (cdr x) 0)))
+      (let loop1 ((dirs library-locations))
+        (pp dirs)
+        (if (not (pair? dirs))
 
-                  (define (try-path path)
-                    (let ((port
-                           (with-exception-catcher
-                            (lambda (exc)
-                              #f)
-                            (lambda ()
-                              (open-input-file path)))))
-                      (println "module-path: " partial-path)
-                      (and port
-                           (read-libdef name reference-src port))))
+          (##raise-expression-parsing-exception
+           'cannot-find-library
+           reference-src
+           (##desourcify reference-src))
 
-                  (or (try-path
-                       (string-append (path-expand
-                                       (path-strip-directory partial-path)
-                                       partial-path)
-                                      ext))
-                      (try-path
-                       (string-append partial-path
-                                      ext))
-                      (loop2 (cdr kinds)))))))))))
+          (let* ((dir
+                   (if (car dirs)
+                     (path-expand (car dirs))
+                     (let* ((locat
+                              (and reference-src
+                                   (##source-locat reference-src)))
+                            (relative-to-path
+                              (and locat
+                                   (##container->path
+                                    (##locat-container locat)))))
+                       (if relative-to-path ;; should have a std function for this
+                         (##path-directory
+                          (##path-normalize relative-to-path))
+                         (##current-directory)))))
+                 (partial-path
+                   (parts->path module-name dir)))
+            
+                (println "Failed: " partial-path)
+                (pp dirs)
+            (or (try-path
+                  (path-expand
+                    (path-strip-directory partial-path)
+                    partial-path))
+                (try-path partial-path)
+                (loop1 (cdr dirs)))))))))
 
 (define (read-first port)
   (let* ((rt
@@ -189,24 +225,16 @@
 (define (read-libdef-scm name reference-src port)
   (parse-define-library (read-first port)))
 
+(define library-user-location (getenv "R7RS_LIBRARY_LOCATION" #f))
+
 (define library-locations #f)
 #;(set! library-locations
       (list #f        ;; #f means relative to source file
             ""        ;; "" means current directory
             "~~lib")) ;; lib directory in Gambit installation directory
-
-(define (get-library-locations)
-  (or library-locations
-    (let ((r7rs-library-path (getenv "R7RS_LIBRARY_LOCATION" #f)))
-      (set! library-locations
-        (if r7rs-library-path
-          (list r7rs-library-path "")
-          (list "")))
-      library-locations)))
-        
-    
-    
-
+(set! library-locations
+  (cons-expand
+    #f "" "~~lib" (or library-user-location '())))
 
 (define library-kinds #f)
 (set! library-kinds
@@ -540,7 +568,12 @@
                              (make-table test: eq?)
                              '()
                              '())))
-
+             #;(println "src-source-locat: "
+                      (object->string
+                        (##source-locat src)))
+             #;(println "name-source-locat: "
+                      (object->string
+                        (##source-locat name-src)))
              (parse-body ctx body-srcs)
 
              (let* ((body (reverse (ctx-rev-body ctx)))
@@ -696,16 +729,25 @@
 
       (import-set-err))))
 
+(define (import->symbolic-string name)
+  (let ((fst (car name)))
+      (if (or (string=? fst "http:")
+              (string=? fst "https:"))
+        (string-append fst (parts->path (cdr name) ""))
+        (parts->path name ""))))
+
 (define (define-library-expand src)
   (let* ((ld (parse-define-library src))
          (ld-imports
            (map (lambda (x)
                   (let* ((idmap (vector-ref x 0))
                          (imports (vector-ref x 1)))
+
+                    (println "ImportName: " (object->string (idmap-name idmap)))
                     `(##begin
 
                       (##require-module
-                          ,(parts->path (idmap-name idmap) ""))
+                          ,(import->symbolic-string (idmap-name idmap)))
 
                       ,@(if (null? imports)
                           '()
@@ -749,7 +791,7 @@
 (define (import-expand src)
   ;; Local ctx
   (define rev-global-imports '())
- 
+
   (##deconstruct-call
    src
    -2
@@ -768,7 +810,7 @@
 
                 ;; Imports dynamic (for functions)
                 (##require-module
-                 ,(parts->path (idmap-name idmap) ""))
+                 ,(import->symbolic-string (idmap-name idmap)))
 
 
                 (##namespace
