@@ -134,6 +134,12 @@
                  fst
                  (read-all p (lambda (p) (read-line p #\/))))))))))
 
+(define (path->parts path)
+  (call-with-input-string
+    path
+    (lambda (r)
+      (read-all r (lambda (p) (read-line p #\/))))))
+
 (define (list-remove-index lst index)
   (let loop ((i 0) (rest lst) (rev-lst '()))
     (if (pair? rest)
