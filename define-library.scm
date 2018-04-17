@@ -134,6 +134,16 @@
                  fst
                  (read-all p (lambda (p) (read-line p #\/))))))))))
 
+(define (list-remove-index lst index)
+  (let loop ((i 0) (rest lst) (rev-lst '()))
+    (if (pair? rest)
+      (if (= i index)
+        (loop (+ i 1) (cdr rest) rev-lst)
+        (loop (+ i 1) (cdr rest) (cons (car rest) rev-lst)))
+      (if (> index i)
+        (error "List index out of range")
+        (reverse rev-lst)))))
+
 (define (get-libdef name reference-src)
   (let* ((has-repo? (let ((fst (car name)))
                       (and
@@ -152,21 +162,31 @@
                              (lambda (exc)
                                #f)
                              (lambda ()
+                               (println-log "try open: " (string-append path ext))
                                (open-input-file (string-append path ext))))))
                  (if port
                    (read-libdef name reference-src port)
                    (loop (cdr kinds))))))))
-
     (if has-repo?
       ;; Need bootstraping
-      (let* ((module (package#url-parts->module-type has-repo? module-name "tree"))
-             (installed? (package#installed? module)))
+      ;((module (package#url-parts->module-type has-repo? module-name "tree"))
+      ;     (installed? (package#installed? module)))
+      ;(list "host" "user" "repo-name" "keyword" "tags/branch" "subdir")
+      (let* ((module-path (parts->path (list-remove-index module-name 3) ""))
+             (module-canonical-name (if (> (length module-name) 5)
+                                      (path-strip-directory module-path)
+                                      (list-ref module-name 2))))
+        (println-log "module-path: " module-path)
+        (println-log "module-canonical-name: " module-canonical-name)
+
         (or
           (and
-            installed?
-            (try-path (##path-expand
-                       (package#module-name module)
-                       installed?)))
+            library-user-location
+            (let ((fullpath (path-expand
+                              (path-expand module-canonical-name module-path)
+                              library-user-location)))
+              (println-log fullpath)
+              (try-path fullpath)))
           ;; Could install it if does not require git-clone.
           (##raise-expression-parsing-exception
            'cannot-find-library
@@ -174,7 +194,6 @@
            (##desourcify reference-src))))
 
       (let loop1 ((dirs library-locations))
-        (pp dirs)
         (if (not (pair? dirs))
 
           (##raise-expression-parsing-exception
@@ -198,9 +217,7 @@
                          (##current-directory)))))
                  (partial-path
                    (parts->path module-name dir)))
-            
-                (println "Failed: " partial-path)
-                (pp dirs)
+
             (or (try-path
                   (path-expand
                     (path-strip-directory partial-path)
@@ -218,32 +235,35 @@
     (close-input-port port)
     first))
 
-#;
+
 (define (read-libdef-sld name reference-src port)
   (parse-define-library (read-first port)))
 
 (define (read-libdef-scm name reference-src port)
   (parse-define-library (read-first port)))
 
+;; Toggle logging
+(define debug-mode #f)
+
 (define library-user-location (getenv "R7RS_LIBRARY_LOCATION" #f))
 
-(define library-locations #f)
-#;(set! library-locations
-      (list #f        ;; #f means relative to source file
-            ""        ;; "" means current directory
-            "~~lib")) ;; lib directory in Gambit installation directory
-(set! library-locations
-  (cons-expand
-    #f "" "~~lib" (or library-user-location '())))
+(define library-locations
+  (list #f        ;; #f means relative to source file
+;        ""        ;; "" means current directory
+        "~~lib")) ;; lib directory in Gambit installation directory
 
 (define library-kinds #f)
 (set! library-kinds
       (list
-#;
+
        (cons ".sld"
              (vector read-libdef-sld))
        (cons ".scm"
              (vector read-libdef-scm))))
+
+(define (println-log . msg)
+  (if debug-mode
+    (apply println msg)))
 
 (define (parts->path parts dir)
   (if (null? (cdr parts))
@@ -303,7 +323,6 @@
                         (library-name-err)))))
               (else
                (library-name-err)))))
-
     (let ((spec (##desourcify name-src)))
       (if (not (pair? spec))
           (library-name-err)
@@ -545,6 +564,27 @@
                         (cons (cons id crules)
                               rev-macros))))))))
 
+  (define (lib-source-filename->namespace filename)
+    (let ((name-space (string-append (path-strip-extension filename) "#")))
+      (let ((namespace-len (string-length name-space)))
+        (let loop ((i 0))
+          (if (< i namespace-len)
+            (case (string-ref name-space i)
+              ((#\/)
+               (string-set! name-space i #\#)
+               (loop (+ i 1)))
+              (else
+                (loop (+ i 1))))
+            name-space)))))
+
+  (define (has-suffix? str suffix)
+    (let ((str-len (string-length str))
+          (suffix-len (string-length suffix)))
+      (and (< suffix-len str-len)
+           (string=?
+             suffix
+             (substring str (- str-len suffix-len) str-len)))))
+
   (let ((form (##source-strip src)))
     (if (not (and (pair? form)
                   (eq? 'define-library (##source-strip (car form)))))
@@ -559,11 +599,32 @@
          (lambda (name-src . body-srcs)
            (let* ((name
                    (parse-name name-src))
+                  (source-filename (##vector-ref
+                                    (##source-locat name-src) 0))
+                  (is-repo?
+                    (has-prefix? source-filename
+                                 (string-append library-user-location "/")))
+                  (lib-local-namespace (lib-name->namespace name))
+                  (lib-namespace (if is-repo?
+                                   (let ((ns (lib-source-filename->namespace is-repo?)))
+                                     (and (has-suffix? ns lib-local-namespace) ns))
+                                   lib-local-namespace))
+                  #;(dummy (begin
+                           (println "name: " (object->string name))
+                           (println "name-src-locat-container: "
+                                    (has-prefix?
+                                      (path-strip-extension
+                                        (##vector-ref
+                                         (##source-locat name-src) 0))
+                                      (string-append library-user-location "/")))
+                           (println "remote-namespace: " lib-namespace)
+                           (println "namespace: " (lib-name->namespace name))))
                   (ctx
                    (make-ctx src
                              name-src
                              name
-                             (lib-name->namespace name)
+                             (if lib-namespace lib-namespace
+                               (error "Invalid namespace"))
                              (make-table test: eq?)
                              (make-table test: eq?)
                              '()
@@ -736,18 +797,44 @@
         (string-append fst (parts->path (cdr name) ""))
         (parts->path name ""))))
 
+(define (print-and-return src)
+  (for-each
+    (lambda (line)
+      (println (object->string line)))
+    (cdr (##desourcify src)))
+  src)
+
+(define (resolve-relative-path filename)
+  (let loop ((paths library-locations))
+    (and
+      (pair? paths)
+      (let ((result
+              (has-prefix?
+                filename
+                (if (car paths)
+                  (path-expand (car paths))
+                  (current-directory)))))
+        (or result
+          (loop (cdr paths)))))))
+
 (define (define-library-expand src)
   (let* ((ld (parse-define-library src))
          (ld-imports
            (map (lambda (x)
                   (let* ((idmap (vector-ref x 0))
-                         (imports (vector-ref x 1)))
+                         (imports (vector-ref x 1))
+                         (from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
+                    (if debug-mode
+                      (println "from-file: " from-file))
 
-                    (println "ImportName: " (object->string (idmap-name idmap)))
                     `(##begin
 
                       (##require-module
-                          ,(import->symbolic-string (idmap-name idmap)))
+                          ,(if from-file
+                             (vector
+                               (import->symbolic-string (idmap-name idmap)) from-file)
+                             (import->symbolic-string (idmap-name idmap))))
+
 
                       ,@(if (null? imports)
                           '()
@@ -777,7 +864,6 @@
                                (idmap-macros idmap))))))
 
                 (libdef-imports ld))))
-
     (##expand-source-template
      src
      (if (null? ld-imports)
@@ -806,12 +892,18 @@
    src
    `(##begin
      ,@(map (lambda (idmap)
+              ;; Relative import within module (not completed yet)
+              (let ((from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
+                (if debug-mode
+                  (println "import-from-file: " from-file))
               `(##begin
 
                 ;; Imports dynamic (for functions)
                 (##require-module
-                 ,(import->symbolic-string (idmap-name idmap)))
-
+                 ,(if from-file
+                    (vector
+                      (import->symbolic-string (idmap-name idmap)) from-file)
+                    (import->symbolic-string (idmap-name idmap))))
 
                 (##namespace
                  (,(idmap-namespace idmap)
@@ -837,7 +929,7 @@
                                      (##quote ,(cdr m))
                                      src))))
                                '())))
-                         (idmap-macros idmap)))))
+                         (idmap-macros idmap))))))
             rev-global-imports))))
 
 (define-runtime-syntax import
