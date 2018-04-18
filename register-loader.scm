@@ -5,6 +5,7 @@
 (namespace ("dl#"
             debug-mode
             path->parts
+            parts->path
             println-log
             has-prefix?))
 
@@ -42,14 +43,16 @@
   (tag library-tag)
   (subdir library-subdir))
 
-(define (repo-parts->host-library parts)
+(define (repo-parts->host-library parts has-tree-sep?)
   (define (parse-username host rest)
     (and (pair? rest)
          (parse-reponame host (car rest) (cdr rest))))
 
   (define (parse-reponame host username rest)
     (and (pair? rest)
-         (parse-tree host username (car rest) (cdr rest))))
+         (if has-tree-sep?
+           (parse-tree host username (car rest) (cdr rest))
+           (parse-tag host username (car rest) #f (cdr rest)))))
 
   (define (parse-tree host username repo-name rest)
     (and (pair? rest)
@@ -66,9 +69,9 @@
   (and (pair? parts)
        (parse-username (car parts) (cdr parts))))
 
-(define (path->host-library path)
+(define (path->host-library path #!optional (has-tree-sep? #t))
   (repo-parts->host-library
-    (path->parts path)))
+    (path->parts path) has-tree-sep?))
 
 (define (library-not-found-exception libname)
   (##raise-module-not-found-exception
@@ -168,9 +171,11 @@
                                     (library-reponame host-lib)
                                     (path-expand (library-username host-lib)
                                                  (library-host host-lib)))))))
-                (let ((libname (module-resolve-in-path-indirect lib-path dl#library-user-location)))
+                (let ((libname (module-resolve-in-path-indirect
+                                 (path-expand (path-strip-directory lib-path)
+                                   lib-path) dl#library-user-location)))
                   (if (boolean? libname)
-                    (println-log "[##load] bug")
+                    (println-log "[##load-bug]")
                     (load-library-by-name libname)))))
 
             ;; local library
@@ -190,7 +195,7 @@
                       (##begin
                        (or (memq module-symbol ##loaded-libraries)
                            (begin
-                             (println-log "[##load]: " x)
+                             (println-log "[##load-success]: " x)
                              (##set! ##loaded-libraries
                               (cons module-symbol ##loaded-libraries))))
                        x)))))))))
