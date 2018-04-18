@@ -17,26 +17,6 @@
 (##include "syntax.scm")
 (##include "syntaxrulesxform.scm")
 
-;;; Syntax cons-expand (cons-expand %1 %2 %3)
-;; (cons %1 (cons %2 (cons %3 '())))
-(define-macro (cons-expand expr . expr*)
-  (define (expand expr rest)
-    (if (pair? rest)
-      `(cons
-         ,expr
-         ,(expand (car rest) (cdr rest)))
-      `(cons ,expr '())))
-  (expand expr expr*))
-
-#;(define-syntax cons-expand
-  (syntax-rules ()
-    ((_ expr)
-     expr)
-    ((_ expr expr* ...)
-     (cons
-       expr
-       (cons-expand expr* ...)))))
-
 (define-runtime-syntax define-syntax
   (lambda (src)
     (let ((locat (##source-locat src)))
@@ -612,8 +592,28 @@
                                  (string-append library-user-location "/")))
                   (lib-local-namespace (lib-name->namespace name))
                   (lib-namespace (if is-repo?
-                                   (let ((ns (lib-source-filename->namespace is-repo?)))
-                                     (and (has-suffix? ns lib-local-namespace) ns))
+                                   (let* ((path-direct
+                                            (path-strip-trailing-directory-separator
+                                              (path-directory is-repo?)))
+                                          (host-lib (library#path->host-library path-direct #f))
+                                          (lib-ns (lib-source-filename->namespace
+                                                    (begin
+                                                      (println-log "[parse-define-library] is-repo?=" path-direct)
+                                                      (println-log "[parse-define-library] path-direct=" path-direct)
+                                                      (println-log "[parse-define-library] host-lib=" host-lib)
+                                                    (parts->path
+                                                      (library#library-subdir host-lib)
+                                                      (library#library-reponame host-lib))))))
+                                     (println-log "lib-ns: " lib-ns)
+                                     (if (string=? lib-ns lib-local-namespace)
+                                       (string-append
+                                         (library#library-host host-lib) "#"
+                                         (library#library-username host-lib) "#"
+                                         (library#library-reponame host-lib) "#"
+                                         (library#library-tag host-lib) "#"
+                                         lib-ns)
+                                       (error "Invalid namespace")))
+
                                    lib-local-namespace))
                   #;(dummy (begin
                            (println "name: " (object->string name))
