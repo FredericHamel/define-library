@@ -181,12 +181,7 @@
         (reverse rev-lst)))))
 
 (define (get-libdef name reference-src)
-  (let* ((has-repo? (let ((fst (car name)))
-                      (and
-                        (or (string=? fst "http:")
-                            (string=? fst "https:"))
-                        fst)))
-         (module-name (if has-repo? (cdr name) name)))
+  (let ((has-repo? (hostname? (car name))))
 
     (define (try-path path)
       (let loop ((kinds library-kinds))
