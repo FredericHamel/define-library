@@ -43,7 +43,7 @@
          (ill-formed-library-name        . "Ill-formed library name")
          (ill-formed-library-decl        . "Ill-formed library declaration")
          (ill-formed-export-spec         . "Ill-formed export spec")
-         (ill-formed-import-set          . "Ill-formed export set")
+         (ill-formed-import-set          . "Ill-formed import set")
          (duplicate-identifier-export    . "Duplicate export of identifier")
          (duplicate-identifier-import    . "Duplicate import of identifier")
          (unexported-identifier          . "Library does not export identifier")
