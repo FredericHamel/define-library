@@ -199,24 +199,33 @@
                    (read-libdef name reference-src port)
                    (loop (cdr kinds))))))))
     (if has-repo?
-      ;(list "host" "user" "repo-name" "keyword" "tags/branch" "subdir")
-      ;;;; TODO use library#parts->host-library to strengthen code
-      ;;;; FIXME this code does fail if "keyword" not well place.  not working...
-      (let* ((module-path (parts->path module-name #;(list-remove-index module-name 3) ""))
-             (module-canonical-name (if (> (length module-name) 5)
-                                      (path-strip-directory module-path)
-                                      (list-ref module-name 2))))
+      ;; Url parts example: (list "host" "user" "repo-name" "keyword" "tags/branch" "subdir")
+      (let* ((host-lib (repo-parts->host-library name))
+             (module-path (if host-lib
+                            (path-expand
+                              (path-expand
+                                (path-expand
+                                  (path-expand
+                                    (library-tag host-lib)
+                                    (library-treesep host-lib))
+                                  (library-reponame host-lib))
+                                (library-username host-lib))
+                              (library-host host-lib))
+                            (error "Invalid host-library url")))
+             (module-canonical-name (if (null? (library-subdir host-lib))
+                                      (library-reponame host-lib)
+                                      (list-ref
+                                        (library-subdir host-lib)
+                                        (- (length (library-subdir host-lib)) 1)))))
         (println-log "module-path: " module-path)
         (println-log "module-canonical-name: " module-canonical-name)
 
         (or
-          (and
-            library-user-location
-            (let ((fullpath (path-expand
-                              (path-expand module-canonical-name module-path)
-                              library-user-location)))
-              (println-log "Fullpath: " fullpath)
-              (try-path fullpath)))
+          (let ((fullpath (path-expand
+                            (path-expand module-canonical-name module-path)
+                            library-user-location)))
+            (println-log "Fullpath: " fullpath)
+            (try-path fullpath))
           ;; Could install it if does not require git-clone.
           (##raise-expression-parsing-exception
            'cannot-find-library
@@ -246,7 +255,7 @@
                           (##path-normalize relative-to-path))
                          (##current-directory)))))
                  (partial-path
-                   (parts->path module-name dir)))
+                   (parts->path name dir)))
 
             (or (try-path
                   (path-expand
@@ -275,7 +284,10 @@
 ;; Toggle logging
 (define debug-mode #t)
 
-(define library-user-location (getenv "R7RS_LIBRARY_LOCATION" #f))
+(define library-user-location
+  (or
+    (##os-path-gambitdir-map-lookup "userlib") ;; userlib
+    (path-expand "~/.gambit_userlib")))
 
 (define library-locations
   (list #f        ;; #f means relative to source file
