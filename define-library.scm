@@ -644,35 +644,45 @@
                    (parse-name name-src))
                   (source-filename (##vector-ref
                                     (##source-locat name-src) 0))
-                  (is-repo?
+                  (is-userlib?
                     (has-prefix? source-filename
-                                 (string-append library-user-location "/")))
+                                 (##string-append library-user-location "/")))
+
+                  ;; FIXME: This code is repetitive.
+                  (parts (and is-userlib? (path->parts is-userlib?)))
+
+                  (is-repo? (and is-userlib? (hostname? (car parts))))
+
                   (lib-local-namespace (lib-name->namespace name))
                   (lib-namespace (if is-repo?
                                    (let* ((path-direct
                                             (path-strip-trailing-directory-separator
-                                              (path-directory is-repo?)))
+                                              (path-directory is-userlib?)))
                                           (host-lib (path->host-library path-direct))
                                           (lib-ns (lib-source-filename->namespace
                                                     (begin
-                                                      (println-log "[parse-define-library] is-repo?=" path-direct)
+                                                      (println-log "[parse-define-library] is-repo?=" is-repo?)
                                                       (println-log "[parse-define-library] path-direct=" path-direct)
                                                       (println-log "[parse-define-library] host-lib=" host-lib)
-                                                    (parts->path
-                                                      (library-subdir host-lib)
+                                                    (if (pair? (library-subdir host-lib))
+                                                      (parts->path
+                                                        (library-subdir host-lib)
+                                                        (library-reponame host-lib))
                                                       (library-reponame host-lib))))))
                                      (println-log "lib-ns: " lib-ns)
                                      (println-log "lib-local-namespace: " lib-local-namespace)
                                      (if (string=? lib-ns lib-local-namespace)
-                                       (string-append
-                                         (library-host host-lib) "/"
-                                         (library-username host-lib) "/"
-                                         (library-reponame host-lib) "/"
-                                         (library-treesep host-lib) "/"
-                                         (library-tag host-lib) "/"
-                                         (parts->path (library-subdir host-lib) "") "#")
+                                       (let ((ns (string-append
+                                                   (library-host host-lib) "/"
+                                                   (library-username host-lib) "/"
+                                                   (library-reponame host-lib) "/"
+                                                   (library-treesep host-lib) "/"
+                                                   (library-tag host-lib))))
+                                         (string-append
+                                           (if (pair? (library-subdir host-lib))
+                                             (parts->path (library-subdir host-lib) ns) ns)
+                                           "#"))
                                        (error "Invalid namespace")))
-
                                    lib-local-namespace))
                   #;(dummy (begin
                            (println "name: " (object->string name))
