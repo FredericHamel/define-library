@@ -292,6 +292,7 @@
 (define library-locations
   (list #f        ;; #f means relative to source file
 ;        ""        ;; "" means current directory
+        library-user-location
         "~~lib")) ;; lib directory in Gambit installation directory
 
 (define library-kinds #f)
