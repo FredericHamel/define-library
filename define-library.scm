@@ -68,6 +68,7 @@
   name
   namespace
   macros
+  only-export?
   map
 )
 
@@ -703,6 +704,7 @@
                  (ctx-name ctx)
                  (ctx-namespace ctx)
                  macros
+                 (and (null? body) (null? (ctx-rev-imports ctx))) ;; Replace with good value
                  (table->list (ctx-exports-tbl ctx)))
 
                 (map cdr (reverse (ctx-rev-imports ctx)))
@@ -739,6 +741,7 @@
                               (idmap-name idmap)
                               (idmap-namespace idmap)
                               (idmap-macros idmap)
+                              (idmap-only-export? idmap)
                               (append (map (lambda (r)
                                              (cons (cdr r) (cdar r)))
                                            renames)
@@ -788,6 +791,7 @@
                          (idmap-name idmap)
                          (idmap-namespace idmap)
                          (idmap-macros idmap)
+                         (idmap-only-export? idmap)
                          (let ((prefix-str (symbol->string prefix)))
                            (map (lambda (x)
                                   (cons (string->symbol
@@ -821,6 +825,7 @@
                       (idmap-name idmap)
                       (idmap-namespace idmap)
                       (keep only-keep (idmap-macros idmap))
+                      (idmap-only-export? idmap)
                       (keep only-keep (idmap-map idmap))))))))
 
           (let* ((name
@@ -837,6 +842,7 @@
               name
               (libdef-namespace ld)
               (idmap-macros (libdef-exports ld))
+              (and (null? (libdef-body ld)) (null? (libdef-imports ld)))
               (idmap-map (libdef-exports ld))))))
 
       (import-set-err))))
@@ -880,7 +886,7 @@
                       ;; TODO: Detect host library import
                       ,(let ((symbol-name (string->symbol (import->symbolic-string (idmap-name idmap)))))
                          ;; Special library
-                         (if (##eq? symbol-name 'gambit)
+                         (if (idmap-only-export? idmap)
                            `(##begin)
                            `(##require-module ,symbol-name)))
 
@@ -915,7 +921,9 @@
     (##expand-source-template
      src
      (if (null? ld-imports)
-       `(##begin) ;; empty library
+       (if (null? (libdef-body ld))
+         `(##begin) ;; empty library
+         (error "Cannot have body"))
        `(##begin
          (define-macro (dummy)
            (table-set! (##compilation-scope) 'module-name ,(libdef-namespace ld))
@@ -954,14 +962,9 @@
                 ;; Imports dynamic (for functions)
                 ,(let ((symbol-name (string->symbol (import->symbolic-string (idmap-name idmap)))))
                    ;; Special library
-                   (if (##eq? symbol-name 'gambit)
+                   (if (idmap-only-export? idmap)
                      `(##begin)
                      `(##require-module ,symbol-name)))
-
-
-                (##require-module
-                 ,(string->symbol
-                    (import->symbolic-string (idmap-name idmap))))
 
                 (##namespace
                  (,(idmap-namespace idmap)
