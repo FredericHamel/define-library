@@ -879,8 +879,6 @@
                          (imports (vector-ref x 1))
                          ;; TODO: Reimplement relative import.
                          (from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
-                    (if debug-mode
-                      (println "from-file: " from-file))
 
                     `(##begin
                       ;; TODO: Detect host library import
