@@ -273,7 +273,7 @@
   (parse-define-library (read-first port)))
 
 ;; Toggle logging
-(define debug-mode #t)
+(define debug-mode #f)
 
 (define library-user-location
   (or
@@ -675,16 +675,7 @@
                                            "#"))
                                        (error "Invalid namespace")))
                                    lib-local-namespace))
-                  #;(dummy (begin
-                           (println "name: " (object->string name))
-                           (println "name-src-locat-container: "
-                                    (has-prefix?
-                                      (path-strip-extension
-                                        (##vector-ref
-                                         (##source-locat name-src) 0))
-                                      (string-append library-user-location "/")))
-                           (println "remote-namespace: " lib-namespace)
-                           (println "namespace: " (lib-name->namespace name))))
+
                   (ctx
                    (make-ctx src
                              name-src
@@ -695,12 +686,6 @@
                              (make-table test: eq?)
                              '()
                              '())))
-             #;(println "src-source-locat: "
-                      (object->string
-                        (##source-locat src)))
-             #;(println "name-source-locat: "
-                      (object->string
-                        (##source-locat name-src)))
              (parse-body ctx body-srcs)
 
              (let* ((body (reverse (ctx-rev-body ctx)))
@@ -963,8 +948,7 @@
               ;; Relative import within module (not completed yet)
 
               (let ((from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
-                (if debug-mode
-                  (println "import-from-file: " from-file))
+
               `(##begin
 
                 ;; Imports dynamic (for functions)
@@ -1018,10 +1002,6 @@
 (##scheme-file-extensions-set!
  (cons '(".sld" . #f) ##scheme-file-extensions))
 
-(println (object->string ##scheme-file-extensions))
-
-
-
 (define (repo-parts->host-library parts)
   (define (parse-username host rest)
     (and (pair? rest)
@@ -1056,12 +1036,12 @@
    libname))
 
 (define (load-dynamic-module module-ref)
-  (println "Loading " module-ref)
+  (println-log "Loading " module-ref)
   (let* ((parts (path->parts module-ref))
          (fst-part (car parts))
          (build-version-target
            (path-expand
-             (##string-append (system-version-string) "@" "C") ".builds")))
+             (##string-append (system-version-string) "@" (##symbol->string (macro-target))) ".builds")))
 
     (if (hostname? fst-part)
       (let ((host-lib (repo-parts->host-library parts)))
@@ -1094,8 +1074,7 @@
           (begin
             (load (path-expand (string-append fst-part ".o1") module-build-path))
             (##load-required-module (string->symbol (string-append module-ref "#"))))
-          (error "Package not built for target C")))))
-  #;(library-not-found-exception module-ref))
+          (error "Package not built for target " (##symbol->string (macro-target))))))))
 
 (##load-required-module-set!
  (lambda (module-ref)
@@ -1109,121 +1088,4 @@
     (else
       (library-not-found-exception module-ref)))))
 
-
-;; Redo from-scratch.
-#;(##load-required-module-set!
-   (lambda (module-ref)
-     (define (err)
-       (##raise-module-not-found-exception
-        ##default-load-required-module
-        module-ref))
-
-     (define (module-resolve-in-path-indirect module-fullname path)
-       (let ((module-path (path-expand module-fullname path)))
-         (println-log "Try: " module-path)
-         (and (file-exists? (string-append module-path ".sld")) module-path)))
-
-     (define (module-resolve-in-path module-fullname module-canonical-name path)
-       (let ((module-path (path-expand module-fullname path)))
-         (println-log "Try: " module-path)
-         (if (file-exists? (string-append module-path ".sld"))
-           module-path
-           (module-resolve-in-path-indirect
-             (path-expand module-canonical-name module-fullname) path))))
-
-     (define (module-resolve module-fullname)
-       (let ((module-canonical-name
-               (path-strip-extension
-                 (path-strip-directory module-fullname))))
-         (let loop ((paths ##sys-path))
-           (if (pair? paths)
-             ;; Look at this: Source of future bug
-             (let ((path (or (car paths) (current-directory))))
-               (if path
-                 (let ((module-path (module-resolve-in-path
-                                      module-fullname module-canonical-name (path-expand path))))
-                   (if module-path
-                     module-path
-                     (loop (cdr paths))))))
-             (err)))))
-
-     (define (is-standard-lib? name)
-       (let ((name-length (##string-length name)))
-         (and (> name-length 5)
-              (##string=? (##substring name 0 5) "~~lib")
-              name)))
-
-     
-
-     (cond
-       ((symbol? module-ref)
-        (if ()))
-       #;((vector? module-ref)
-        (if (= (vector-length module-ref) 2)
-          (let* ((module-name (vector-ref module-ref 0))
-                 (module-canonical-name (path-strip-directory
-                                          (path-strip-extension module-name)))
-                 (from-file (vector-ref module-ref 1))
-                 (from-path (and
-                              (string=? (path-extension from-file) ".sld")
-                              (module-resolve (path-strip-extension from-file)))))
-            (or (and
-                  from-path
-                  (module-resolve-in-path module-name module-canonical-name from-path))
-                (let ((module-path (module-resolve module-name)))
-                  (if (boolean? module-path)
-                    (println-log "There is a bug: " module-name)
-                    (load-library-by-name module-path)))))))
-
-       #;((string? module-ref)
-        (let ((has-repo? (or (has-prefix? module-ref "http:")
-                             (has-prefix? module-ref "https:"))))
-          (if has-repo?
-            ;; host library
-            (let ((host-lib (path->host-library has-repo?)))
-              (println (object->string host-lib))
-              (let ((lib-path (path-expand
-                                (let ((subdir (library-subdir host-lib)))
-                                  (if (null? subdir)
-                                    (library-reponame host-lib)
-                                    (parts->path subdir "")))
-                                (path-expand
-                                  (library-tag host-lib)
-                                  (path-expand
-                                    (path-expand
-                                      (library-treesep host-lib)
-                                      (library-reponame host-lib))
-                                    (path-expand (library-username host-lib)
-                                                 (library-host host-lib)))))))
-                (let ((libname (module-resolve-in-path-indirect
-                                 (path-expand (path-strip-directory lib-path)
-                                   lib-path) dl#library-user-location)))
-                  (if (boolean? libname)
-                    (println-log "[##load-bug]")
-                    (load-library-by-name libname)))))
-
-            ;; local library
-            (let ((module (##string->symbol module-ref)))
-              (let* ((module-path (module-resolve module-ref))
-                     (module-symbol (##string->symbol module-path)))
-                (or ;; load module ignoring warning.
-                  (and (memq module-symbol ##loaded-libraries)
-                       module-path)
-                  (let ((x (##load module-path
-                            (lambda (script-line script-path) #f)
-                            #t
-                            #f
-                            #f
-                            #t)))
-                    (if (##fixnum? x)
-                      (err)
-                      (##begin
-                       (or (memq module-symbol ##loaded-libraries)
-                           (begin
-                             (println-log "[##load-success]: " x)
-                             (##set! ##loaded-libraries
-                              (cons module-symbol ##loaded-libraries))))
-                       x)))))))))
-       (else
-         (old-load-required-module module-ref)))))
 ;;;============================================================================
