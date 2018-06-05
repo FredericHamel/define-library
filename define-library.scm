@@ -1075,7 +1075,7 @@
           (begin
             (load (path-expand (string-append fst-part ".o1") module-build-path))
             (##load-required-module (string->symbol (string-append module-ref "#"))))
-          (error "Package not built for target " (##symbol->string (macro-target))))))))
+          (error (string-append "Package `" module-ref "` not built for target " (##symbol->string (macro-target)))))))))
 
 (##load-required-module-set!
  (lambda (module-ref)
