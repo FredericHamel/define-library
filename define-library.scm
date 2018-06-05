@@ -6,6 +6,12 @@
 
 ;;;============================================================================
 
+(define-macro (dummy)
+  (table-set! (##compilation-scope) 'module-name "_define-library")
+  (table-set! (##compilation-scope) 'linker-name "_define-library")
+  #f)
+(dummy) ;; Set namespace to _define-library
+
 (##namespace ("dl#"))
 (##include "~~lib/gambit#.scm")
 (##include "~~lib/_gambit#.scm")
