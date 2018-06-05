@@ -134,21 +134,6 @@
   (let ((name-len (string-length name)))
     (parse-segment-start name 0 0 name-len)))
 
-(define (start-width? str prefix)
-  (and (string? str)
-       (string? prefix)
-       (let ((len-str (string-length str))
-             (len-prefix (string-length prefix)))
-         (and (>= len-str len-prefix)
-              (string=? (substring str 0 len-prefix) prefix)
-              prefix))))
-
-(define (unsafe-string-remove-prefix str prefix)
-  (let ((len-str (##string-length str))
-        (len-prefix (##string-length prefix)))
-    (##substring str len-prefix len-str)))
-
-
 (define (repo->parts repo)
   (and (symbol? repo)
        (let* ((repo-str (symbol->string repo)))
