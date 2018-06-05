@@ -1041,34 +1041,55 @@
        (parse-username (car parts) (cdr parts))))
 
 (define (path->host-library path #!optional (has-tree-sep? #t))
-  (repo-parts->host-library
-    (path->parts path) has-tree-sep?))
+  (repo-parts->host-library (path->parts path)))
 
 (define (library-not-found-exception libname)
   (##raise-module-not-found-exception
    ;; not sure if I should use this reference...
-   ##default-load-required-module
+   ##load-required-module
    libname))
 
-(define (string-index-of str c)
-  (let ((str-len (string-length str)))
-    (let loop ((i 0))
-      (if (< i str-len)
-        (if (char=? (string-ref str i) c)
-          i
-          (loop (+ i 1)))
-        -1))))
-
-(define (load-external-module module-ref)
+(define (load-dynamic-module module-ref)
   (println "Loading " module-ref)
   (let* ((parts (path->parts module-ref))
-         (fst-part (car parts)))
+         (fst-part (car parts))
+         (build-version-target
+           (path-expand
+             (##string-append (system-version-string) "@" "C") ".builds")))
+
     (if (hostname? fst-part)
       (let ((host-lib (repo-parts->host-library parts)))
-        (println (object->string host-lib)))
-      (println "Yeah this is not local")))
-    
-  (library-not-found-exception))
+        (let ((libpath (path-expand
+                         (path-expand
+                           (library-reponame host-lib)
+                           (library-username host-lib))
+                         (library-host host-lib)))
+              (build-path (path-expand
+                              (library-reponame host-lib)
+                              ;; FIXME: Should be given by the system.
+                              build-version-target)))
+
+          (println-log "[load] build-path: " build-path)
+
+          ;; TODO: check if it exists.
+          (let ((lib (path-expand
+                       (library-tag host-lib)
+                       (path-expand
+                         (library-treesep host-lib)
+                         libpath))))
+            (println (##string->symbol (##string-append lib "#")))
+            ;; FIXME: use ##load instead
+            (load (path-expand (path-expand build-path lib) library-user-location))
+            (##load-required-module (##string->symbol (##string-append lib "#"))))))
+
+      (let* ((module-root fst-part)
+             (module-build-path (path-expand build-version-target (path-expand module-root library-user-location))))
+        (if (file-exists? (path-expand (string-append fst-part ".o1") module-build-path))
+          (begin
+            (load (path-expand (string-append fst-part ".o1") module-build-path))
+            (##load-required-module (string->symbol (string-append module-ref "#"))))
+          (error "Package not built for target C")))))
+  #;(library-not-found-exception module-ref))
 
 (##load-required-module-set!
  (lambda (module-ref)
@@ -1078,7 +1099,7 @@
        (if module
          (##load-required-module-structs (##list module) #t)
          ;; XXX: rethink the name of that function
-         (load-external-module (symbol->string module-ref)))))
+         (load-dynamic-module (##symbol->string module-ref)))))
     (else
       (library-not-found-exception module-ref)))))
 
