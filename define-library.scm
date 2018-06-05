@@ -851,11 +851,7 @@
       (import-set-err))))
 
 (define (import->symbolic-string name)
-  (let ((fst (car name)))
-      (if (or (string=? fst "http:")
-              (string=? fst "https:"))
-        (string-append fst (parts->path (cdr name) ""))
-        (parts->path name ""))))
+  (parts->path name ""))
 
 (define (print-and-return src)
   (for-each
