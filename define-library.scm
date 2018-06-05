@@ -905,12 +905,12 @@
                       (println "from-file: " from-file))
 
                     `(##begin
-
                       ;; TODO: Detect host library import
-                      (##require-module
-                       ,(string->symbol
-                          (import->symbolic-string (idmap-name idmap))))
-
+                      ,(let ((symbol-name (string->symbol (import->symbolic-string (idmap-name idmap)))))
+                         ;; Special library
+                         (if (##eq? symbol-name 'gambit)
+                           `(##begin)
+                           `(##require-module ,symbol-name)))
 
                       ,@(if (null? imports)
                           '()
@@ -945,6 +945,11 @@
      (if (null? ld-imports)
        `(##begin) ;; empty library
        `(##begin
+         (define-macro (dummy)
+           (table-set! (##compilation-scope) 'module-name ,(libdef-namespace ld))
+           (table-set! (##compilation-scope) 'linker-name ,(libdef-namespace ld))
+           #f)
+         (dummy)
          (##namespace (,(libdef-namespace ld)))
          ,@ld-imports
          ,@(libdef-body ld)
@@ -976,6 +981,13 @@
               `(##begin
 
                 ;; Imports dynamic (for functions)
+                ,(let ((symbol-name (string->symbol (import->symbolic-string (idmap-name idmap)))))
+                   ;; Special library
+                   (if (##eq? symbol-name 'gambit)
+                     `(##begin)
+                     `(##require-module ,symbol-name)))
+
+
                 (##require-module
                  ,(string->symbol
                     (import->symbolic-string (idmap-name idmap))))
