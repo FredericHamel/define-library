@@ -277,9 +277,8 @@
 (define debug-mode #f)
 
 (define library-user-location
-  (or
-    (##os-path-gambitdir-map-lookup "userlib") ;; userlib
-    (path-expand "~/.gambit_userlib")))
+  ;; userlib
+  (path-expand (##os-path-gambitdir-map-lookup "userlib")))
 
 (define library-locations
   (list #f        ;; #f means relative to source file
@@ -638,7 +637,7 @@
                                     (##source-locat name-src) 0))
                   (is-userlib?
                     (has-prefix? source-filename
-                                 (##string-append library-user-location "/")))
+                                 (path-normalize (##string-append library-user-location "/"))))
 
                   ;; FIXME: This code is repetitive.
                   (parts (and is-userlib? (path->parts is-userlib?)))
