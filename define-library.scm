@@ -735,13 +735,45 @@
 
                 body))))))))
 
-(define (parse-import-set import-set-src)
+(define (parse-import-set import-set-src #!optional (ctx-library #f))
   (let ((import-set (##source-strip import-set-src)))
 
     (define (import-set-err)
       (##raise-expression-parsing-exception
        'ill-formed-import-set
        import-set-src))
+
+    (define (ill-formed-library-name)
+      (##raise-expression-parsing-exception
+       'ill-formed-library-name
+       import-set-src))
+
+    (define (count-point str)
+      (let ((len (string-length str)))
+        (let loop ((i 0))
+          (if (< i len)
+            (case (string-ref str i)
+              ((#\.) (loop (+ i 1)))
+              (else i))
+            (or ctx-library
+                ;; only in global import.
+                (ill-formed-library-name))))))
+
+
+    (define (path-directory* dir num)
+      (if (> num 0)
+        (path-directory*
+          (path-strip-trailing-directory-separator (path-directory dir))
+          (- num 1))
+        dir))
+
+    (define-macro (macro-string-not-empty str err)
+      (let ((g0 (gensym)))
+        `(let ((,g0 ,str))
+           (if (= (string-length ,g0) 0)
+             (,err)
+             ,g0))))
+
 
     (if (pair? import-set)
 
@@ -752,11 +784,11 @@
 
           (if (not (pair? args-srcs))
             (import-set-err)
-            (let ((idmap (parse-import-set (car args-srcs))))
+            (let ((idmap (parse-import-set (car args-srcs) ctx-library)))
               (case head
 
                 ((rename)
-                 (let ((idmap (parse-import-set (car args-srcs))))
+                 (let ((idmap (parse-import-set (car args-srcs) ctx-library)))
                    (let loop ((lst (cdr args-srcs)) (renames '()))
                      (cond ((null? lst)
                             (make-idmap
@@ -854,16 +886,30 @@
 
           (let* ((name
                    (parse-name import-set-src))
+                 (path (parts->path name ""))
+                 (updir-count (count-point path))
+                 (import-name (if ctx-library
+                                (if (> updir-count 0)
+                                  (path->parts
+                                    (path-expand
+                                      (substring path updir-count (string-length path))
+                                      (macro-string-not-empty
+                                        (path-directory* ctx-library (- updir-count 1))
+                                        ill-formed-library-name)))
+                                  name)
+                                ;; Forbid global (import (..foo))
+                                (if (> updir-count 0)
+                                  (ill-formed-library-name)
+                                  name)))
+
                  (name-with-symbols
-                   (map string->symbol name))
+                   (map string->symbol import-name))
                  (ld
-                   (get-libdef name import-set-src))
-                 #;(path (vector-ref path-ld 0))
-                 #;(ld (vector-ref path-ld 1)))
+                   (get-libdef import-name import-set-src)))
             (make-idmap
               import-set-src
               import-set-src
-              name
+              import-name
               (libdef-namespace ld)
               (idmap-macros (libdef-exports ld))
               (and (null? (libdef-body ld)) (null? (libdef-imports ld)))
