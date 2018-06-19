@@ -82,6 +82,11 @@
   body
 )
 
+(define-type libref
+  host        ;; ("github.com" "A") or ()
+  version     ;; ("tree" "1.0.0") or ()
+  path)       ;; ("B" "C" "D")
+
 (define-type host-library-type
   constructor: make-library
   (host library-host)
@@ -100,6 +105,15 @@
          (and (>= len-str len-prefix)
               (string=? (substring str 0 len-prefix) prefix)
               (substring str len-prefix len-str)))))
+
+(define (path-expand* path . rest)
+  (if (pair? rest)
+    (apply
+      path-expand*
+      (path-expand (car rest) path)
+      (cdr rest))
+    path ;(path-normalize path)
+    ))
 
 ;; Test if a valid hostname
 (define (hostname? name)
@@ -192,23 +206,22 @@
                    (loop (cdr kinds))))))))
     (if has-repo?
       ;; Url parts example: (list "host" "user" "repo-name" "keyword" "tags/branch" "subdir")
-      (let* ((host-lib (repo-parts->host-library name))
-             (module-path (if host-lib
-                            (path-expand
-                              (path-expand
-                                (path-expand
-                                  (path-expand
-                                    (library-tag host-lib)
-                                    (library-treesep host-lib))
-                                  (library-reponame host-lib))
-                                (library-username host-lib))
-                              (library-host host-lib))
-                            (error "Invalid host-library url")))
-             (module-canonical-name (if (null? (library-subdir host-lib))
-                                      (library-reponame host-lib)
-                                      (list-ref
-                                        (library-subdir host-lib)
-                                        (- (length (library-subdir host-lib)) 1)))))
+      (let* ((libref (parse-libref name))
+             (module-path (if libref
+                            (apply path-expand* name)
+                            #;(apply
+                              path-expand*
+                              (append
+                                (libref-host libref)
+                                (cons
+                                  (car (libref-path libref))
+                                  (libref-version libref))
+                                (cdr (libref-path libref))))
+                            (error "Invalid libref")))
+             (dummy (println libref))
+             (module-canonical-name
+               (car (libref-path libref))))
+
         (println-log "module-path: " module-path)
         (println-log "module-canonical-name: " module-canonical-name)
 
@@ -363,7 +376,7 @@
           (let ((head (car spec)))
             (if (memq head '(rename prefix only except))
                 (library-name-err) ;; conflict with import declaration syntax
-                (let ((repo-parts (repo->parts head)))
+                (let ((repo-parts (path->parts (symbol->string head))))
                   (if repo-parts
                       (append repo-parts (parse-parts (cdr spec)))
                       (parse-parts spec))))))))
@@ -540,7 +553,7 @@
         (let* ((import-set-src (car import-sets-srcs))
                (rest-srcs (cdr import-sets-srcs))
                ;;; Why ctx in parse-import-set? Cause not used...
-               (idmap (parse-import-set import-set-src)))
+               (idmap (parse-import-set import-set-src (parts->path (ctx-name ctx) ""))))
           (add-imports! ctx import-set-src idmap)
           (parse-import-decl ctx rest-srcs))))
 
@@ -611,6 +624,15 @@
                 (loop (+ i 1))))
             name-space)))))
 
+  (define (join-rev path rest)
+    (if (null? rest)
+      path
+      (join-rev
+        (path-expand
+          path
+          (car rest))
+        (cdr rest))))
+
   (define (has-suffix? str suffix)
     (let ((str-len (string-length str))
           (suffix-len (string-length suffix)))
@@ -649,30 +671,24 @@
                                    (let* ((path-direct
                                             (path-strip-trailing-directory-separator
                                               (path-directory is-userlib?)))
-                                          (host-lib (path->host-library path-direct))
+                                          (libref (path->libref path-direct))
                                           (lib-ns (lib-source-filename->namespace
-                                                    (begin
+                                                    (let ((path-parts (libref-path libref)))
                                                       (println-log "[parse-define-library] is-repo?=" is-repo?)
                                                       (println-log "[parse-define-library] path-direct=" path-direct)
-                                                      (println-log "[parse-define-library] host-lib=" host-lib)
-                                                    (if (pair? (library-subdir host-lib))
-                                                      (parts->path
-                                                        (library-subdir host-lib)
-                                                        (library-reponame host-lib))
-                                                      (library-reponame host-lib))))))
+                                                      (println-log "[parse-define-library] libref=" libref)
+                                                    (join-rev (car path-parts) (cdr path-parts))))))
                                      (println-log "lib-ns: " lib-ns)
                                      (println-log "lib-local-namespace: " lib-local-namespace)
                                      (if (string=? lib-ns lib-local-namespace)
-                                       (let ((ns (string-append
-                                                   (library-host host-lib) "/"
+                                       (let ((ns (path-strip-trailing-directory-separator
+                                                   (path-directory is-userlib?))))
+                                                   #;(((library-host host-lib) "/"
                                                    (library-username host-lib) "/"
                                                    (library-reponame host-lib) "/"
                                                    (library-treesep host-lib) "/"
-                                                   (library-tag host-lib))))
-                                         (string-append
-                                           (if (pair? (library-subdir host-lib))
-                                             (parts->path (library-subdir host-lib) ns) ns)
-                                           "#"))
+                                                   (library-tag host-lib)))
+                                         (string-append ns "#"))
                                        (error "Invalid namespace")))
                                    lib-local-namespace))
 
@@ -1002,32 +1018,36 @@
 (##scheme-file-extensions-set!
  (cons '(".sld" . #f) ##scheme-file-extensions))
 
-(define (repo-parts->host-library parts)
-  (define (parse-username host rest)
-    (and (pair? rest)
-         (parse-reponame host (car rest) (cdr rest))))
+(define (parse-libref parts)
+  (define (parse-libref-root host rest)
+    (if (pair? rest)
+      (parse-libref-version 2 host '() (list (car rest)) (cdr rest))
+      (error "Invalid hosted libref")))
 
-  (define (parse-reponame host username rest)
-    (and (pair? rest)
-         (parse-tree host username (car rest) (cdr rest))))
+  (define (parse-libref-version size host version path rest)
+    (if (> size 0)
+      (if (pair? rest)
+        (parse-libref-version (- size 1) host
+                              (cons (car rest) version) path (cdr rest))
+        (error "Invalid hosted libref"))
+      (parse-libref-path host version path rest)))
 
-  (define (parse-tree host username repo-name rest)
-    (and (pair? rest)
-         (parse-tag host username repo-name (car rest) (cdr rest))))
+  (define (parse-libref-path host version path rest)
+    (if (pair? rest)
+      (parse-libref-path host version (cons (car rest) path) (cdr rest))
+      (make-libref host version path)))
 
-  (define (parse-tag host username repo-name tree-sep rest)
-    (and (pair? rest)
-         (parse-subdir host username repo-name tree-sep (car rest) (cdr rest))))
+  (if (pair? parts)
+    (let ((host (car parts))
+          (rest (cdr parts)))
+      (if (hostname? host)
+        (if (pair? rest)
+          (parse-libref-root (list (car rest) host) (cdr rest))
+          (error "Invalid hosted libref"))
+        (parse-libref-path '() '() (list host))))))
 
-  (define (parse-subdir host username repo-name tree-sep tag subdir)
-    (make-library host username repo-name tree-sep tag subdir))
-
-  ;; parse-host
-  (and (pair? parts)
-       (parse-username (car parts) (cdr parts))))
-
-(define (path->host-library path #!optional (has-tree-sep? #t))
-  (repo-parts->host-library (path->parts path)))
+(define (path->libref path)
+  (parse-libref (path->parts path)))
 
 (define (library-not-found-exception libname)
   (##raise-module-not-found-exception
@@ -1044,29 +1064,27 @@
              (##string-append (system-version-string) "@" (##symbol->string (macro-target))) ".builds")))
 
     (if (hostname? fst-part)
-      (let ((host-lib (repo-parts->host-library parts)))
-        (let ((libpath (path-expand
-                         (path-expand
-                           (library-reponame host-lib)
-                           (library-username host-lib))
-                         (library-host host-lib)))
+      (let ((libref (parse-libref parts)))
+        (let ((lib module-ref
+                   #;(apply
+                     path-expand*
+                     (append
+                       (libref-host libref)
+                       (cons
+                         (car (libref-path libref))
+                         (libref-version libref)))))
+
               (build-path (path-expand
-                              (library-reponame host-lib)
+                              (car (libref-path libref))
                               ;; FIXME: Should be given by the system.
                               build-version-target)))
 
           (println-log "[load] build-path: " build-path)
 
           ;; TODO: check if it exists.
-          (let ((lib (path-expand
-                       (library-tag host-lib)
-                       (path-expand
-                         (library-treesep host-lib)
-                         libpath))))
-            (println (##string->symbol (##string-append lib "#")))
-            ;; FIXME: use ##load instead
-            (load (path-expand (path-expand build-path lib) library-user-location))
-            (##load-required-module (##string->symbol (##string-append lib "#"))))))
+          ;; FIXME: use ##load instead
+          (load (path-expand* library-user-location lib build-path))
+          (##load-required-module (##string->symbol (##string-append lib "#")))))
 
       (let* ((module-root fst-part)
              (module-build-path (path-expand build-version-target (path-expand module-root library-user-location))))
