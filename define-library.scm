@@ -171,20 +171,29 @@
                  (read-all p (lambda (p) (read-line p #\/))))))))))
 
 (define (path->parts path)
+  (let ((path-len (string-length path)))
+    (define (split-path start rev-result)
+      (let loop ((end start))
+        (if (< end path-len)
+          (case (string-ref path end)
+            ((#\/)
+             (split-path (+ end 1)
+                         (if (> end start)
+                           (cons (substring path start end) rev-result)
+                           rev-result)))
+            (else
+              (loop (+ end 1))))
+            (reverse
+              (if (> end start)
+                (cons (substring path start end) rev-result)
+                rev-result)))))
+    (split-path 0 '())))
+
+#;(define (path->parts path)
   (call-with-input-string
     path
     (lambda (r)
       (read-all r (lambda (p) (read-line p #\/))))))
-
-(define (list-remove-index lst index)
-  (let loop ((i 0) (rest lst) (rev-lst '()))
-    (if (pair? rest)
-      (if (= i index)
-        (loop (+ i 1) (cdr rest) rev-lst)
-        (loop (+ i 1) (cdr rest) (cons (car rest) rev-lst)))
-      (if (> index i)
-        (error "List index out of range")
-        (reverse rev-lst)))))
 
 (define (get-libdef name reference-src)
   (let ((has-repo? (hostname? (car name))))
