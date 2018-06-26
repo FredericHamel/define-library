@@ -1,5 +1,5 @@
 
-(define-library (scheme thread)
+(define-library (gambit thread)
   (namespace "")
   
   ;; Subset of thread functionality
