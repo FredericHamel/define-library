@@ -567,9 +567,11 @@
 
                   (libref (##string->libref library-name))
 
-                  (valid? (has-suffix?
-                            (join-rev (macro-libref-path libref) "")
-                            name-str))
+                  (valid? (or
+                            (null? (macro-libref-host libref))
+                            (has-suffix?
+                              (join-rev (macro-libref-path libref) "")
+                              name-str)))
 
                   (ctx
                    (make-ctx src
