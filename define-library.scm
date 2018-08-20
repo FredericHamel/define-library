@@ -15,11 +15,10 @@
 (##namespace ("dl#"))
 (##include "~~lib/gambit#.scm")
 (##include "~~lib/_gambit#.scm")
-
+(##include "~~lib/_library#.scm")
 ;;;============================================================================
 
 ;; Setup implementation of define-syntax and syntax-rules.
-
 (##include "syntax.scm")
 (##include "syntaxrulesxform.scm")
 
@@ -82,20 +81,11 @@
   body
 )
 
-(define-type libref
-  host        ;; ("github.com" "A") or ()
-  version     ;; ("tree" "1.0.0") or ()
-  path)       ;; ("B" "C" "D")
-
-(define-type host-library-type
-  constructor: make-library
-  (host library-host)
-  (username library-username)
-  (repo-name library-reponame)
-  (tree-sep library-treesep)
-  ;; Version
-  (tag library-tag)
-  (subdir library-subdir))
+;; libref defined in _library#.scm
+;;(define-type libref
+;;  host        ;; ("github.com" "A") or ()
+;;  tag         ;; ("tree" "1.0.0") or ()
+;;  path)       ;; ("B" "C" "D")
 
 (define (has-prefix? str prefix)
   (and (string? str)
@@ -105,15 +95,6 @@
          (and (>= len-str len-prefix)
               (string=? (substring str 0 len-prefix) prefix)
               (substring str len-prefix len-str)))))
-
-(define (path-expand* path . rest)
-  (if (pair? rest)
-    (apply
-      path-expand*
-      (path-expand (car rest) path)
-      (cdr rest))
-    path ;(path-normalize path)
-    ))
 
 ;; Test if a valid hostname
 (define (hostname? name)
@@ -155,21 +136,6 @@
   (let ((name-len (string-length name)))
     (parse-segment-start name 0 0 name-len)))
 
-(define (repo->parts repo)
-  (and (symbol? repo)
-       (let* ((repo-str (symbol->string repo)))
-         (call-with-input-string
-           repo-str
-           (lambda (p)
-             (let ((fst (read-line p #\/)))
-               (if (or (string=? fst "http:")
-                       (string=? fst "https:"))
-                 (if (not (char=? (read-char p) #\/))
-                   (error "Invalid import name")))
-               (cons
-                 fst
-                 (read-all p (lambda (p) (read-line p #\/))))))))))
-
 (define (path->parts path)
   (let ((path-len (string-length path)))
     (define (split-path start rev-result)
@@ -189,94 +155,21 @@
                 rev-result)))))
     (split-path 0 '())))
 
-#;(define (path->parts path)
-  (call-with-input-string
-    path
-    (lambda (r)
-      (read-all r (lambda (p) (read-line p #\/))))))
-
 (define (get-libdef name reference-src)
-  (let ((has-repo? (hostname? (car name))))
+  (let* ((name-str (parts->path name ""))
+         (libref (##string->libref name-str)))
+    (let ((lib (##search-library libref)))
+      (if lib
+        (begin
+          (parameterize ((##compilation-scope (make-table test: eq?)))
+            (table-set! (##compilation-scope) 'library-name
+                        (and (pair? (macro-libref-host libref)) name-str))
+            (read-libdef-sld name reference-src (cdr lib))))
 
-    (define (try-path path)
-      (let loop ((kinds library-kinds))
-        (and (pair? kinds)
-             (let* ((x (car kinds))
-                    (ext (car x))
-                    (read-libdef (vector-ref (cdr x) 0)))
-               (let ((port (with-exception-catcher
-                             (lambda (exc)
-                               #f)
-                             (lambda ()
-                               (println-log "try open: " (string-append path ext))
-                               (open-input-file (string-append path ext))))))
-                 (if port
-                   (read-libdef name reference-src port)
-                   (loop (cdr kinds))))))))
-    (if has-repo?
-      ;; Url parts example: (list "host" "user" "repo-name" "keyword" "tags/branch" "subdir")
-      (let* ((libref (parse-libref name))
-             (module-path (if libref
-                            (apply path-expand* name)
-                            #;(apply
-                              path-expand*
-                              (append
-                                (libref-host libref)
-                                (cons
-                                  (car (libref-path libref))
-                                  (libref-version libref))
-                                (cdr (libref-path libref))))
-                            (error "Invalid libref")))
-             (dummy (println libref))
-             (module-canonical-name
-               (car (libref-path libref))))
-
-        (println-log "module-path: " module-path)
-        (println-log "module-canonical-name: " module-canonical-name)
-
-        (or
-          (let ((fullpath (path-expand
-                            (path-expand module-canonical-name module-path)
-                            library-user-location)))
-            (println-log "Fullpath: " fullpath)
-            (try-path fullpath))
-          ;; Could install it if does not require git-clone.
-          (##raise-expression-parsing-exception
-           'cannot-find-library
-           reference-src
-           (##desourcify reference-src))))
-
-      (let loop1 ((dirs library-locations))
-        (if (not (pair? dirs))
-
-          (##raise-expression-parsing-exception
-           'cannot-find-library
-           reference-src
-           (##desourcify reference-src))
-
-          (let* ((dir
-                   (if (car dirs)
-                     (path-expand (car dirs))
-                     (let* ((locat
-                              (and reference-src
-                                   (##source-locat reference-src)))
-                            (relative-to-path
-                              (and locat
-                                   (##container->path
-                                    (##locat-container locat)))))
-                       (if relative-to-path ;; should have a std function for this
-                         (##path-directory
-                          (##path-normalize relative-to-path))
-                         (##current-directory)))))
-                 (partial-path
-                   (parts->path name dir)))
-
-            (or (try-path
-                  (path-expand
-                    (path-strip-directory partial-path)
-                    partial-path))
-                (try-path partial-path)
-                (loop1 (cdr dirs)))))))))
+        (##raise-expression-parsing-exception
+         'cannot-find-library
+         reference-src
+         (##desourcify reference-src))))))
 
 (define (read-first port)
   (let* ((rt
@@ -633,22 +526,22 @@
                 (loop (+ i 1))))
             name-space)))))
 
-  (define (join-rev path rest)
-    (if (null? rest)
-      path
-      (join-rev
-        (path-expand
-          path
-          (car rest))
-        (cdr rest))))
-
   (define (has-suffix? str suffix)
     (let ((str-len (string-length str))
           (suffix-len (string-length suffix)))
-      (and (< suffix-len str-len)
+      (and (<= suffix-len str-len)
            (string=?
              suffix
              (substring str (- str-len suffix-len) str-len)))))
+
+  (define (join-rev parts dir)
+    (if (pair? parts)
+      (join-rev
+        (cdr parts)
+        (path-expand
+          (car parts) ; B
+          dir)) ; C -> C/B
+      dir))
 
   (let ((form (##source-strip src)))
     (if (not (and (pair? form)
@@ -664,48 +557,26 @@
          (lambda (name-src . body-srcs)
            (let* ((name
                    (parse-name name-src))
-                  (source-filename (##vector-ref
-                                    (##source-locat name-src) 0))
-                  (is-userlib?
-                    (has-prefix? source-filename
-                                 (path-normalize (##string-append library-user-location "/"))))
 
-                  ;; FIXME: This code is repetitive.
-                  (parts (and is-userlib? (path->parts is-userlib?)))
+                  (name-str (parts->path name ""))
 
-                  (is-repo? (and is-userlib? (hostname? (car parts))))
+                  ;; Name it is imported or compiled with.
+                  (library-name (or (table-ref (##compilation-scope) 'library-name #f)
+                                    (table-ref (##compilation-scope) 'module-name #f)
+                                    name-str))
 
-                  (lib-local-namespace (lib-name->namespace name))
-                  (lib-namespace (if is-repo?
-                                   (let* ((path-direct
-                                            (path-strip-trailing-directory-separator
-                                              (path-directory is-userlib?)))
-                                          (libref (path->libref path-direct))
-                                          (lib-ns (lib-source-filename->namespace
-                                                    (let ((path-parts (libref-path libref)))
-                                                      (println-log "[parse-define-library] is-repo?=" is-repo?)
-                                                      (println-log "[parse-define-library] path-direct=" path-direct)
-                                                      (println-log "[parse-define-library] libref=" libref)
-                                                    (join-rev (car path-parts) (cdr path-parts))))))
-                                     (println-log "lib-ns: " lib-ns)
-                                     (println-log "lib-local-namespace: " lib-local-namespace)
-                                     (if (string=? lib-ns lib-local-namespace)
-                                       (let ((ns (path-strip-trailing-directory-separator
-                                                   (path-directory is-userlib?))))
-                                                   #;(((library-host host-lib) "/"
-                                                   (library-username host-lib) "/"
-                                                   (library-reponame host-lib) "/"
-                                                   (library-treesep host-lib) "/"
-                                                   (library-tag host-lib)))
-                                         (string-append ns "#"))
-                                       (error "Invalid namespace")))
-                                   lib-local-namespace))
+                  (libref (##string->libref library-name))
+
+                  (valid? (has-suffix?
+                            (join-rev (macro-libref-path libref) "")
+                            name-str))
 
                   (ctx
                    (make-ctx src
                              name-src
                              name
-                             (if lib-namespace lib-namespace
+                             (if valid?
+                               (##libref->string libref #t)
                                (error "Invalid namespace"))
                              (make-table test: eq?)
                              (make-table test: eq?)
@@ -946,9 +817,9 @@
          (ld-imports
            (map (lambda (x)
                   (let* ((idmap (vector-ref x 0))
-                         (imports (vector-ref x 1))
+                         (imports (vector-ref x 1)))
                          ;; TODO: Reimplement relative import.
-                         (from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
+                         ;(from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
 
                     `(##begin
                       ;; TODO: Detect host library import
@@ -993,11 +864,6 @@
          `(##begin) ;; empty library
          (error "Cannot have body"))
        `(##begin
-         (define-macro (dummy)
-           (table-set! (##compilation-scope) 'module-name ,(libdef-namespace ld))
-           (table-set! (##compilation-scope) 'linker-name ,(libdef-namespace ld))
-           #f)
-         (dummy)
          (##namespace (,(libdef-namespace ld)))
          ,@ld-imports
          ,@(libdef-body ld)
@@ -1023,7 +889,7 @@
      ,@(map (lambda (idmap)
               ;; Relative import within module (not completed yet)
 
-              (let ((from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
+              ;(let ((from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
 
               `(##begin
 
@@ -1058,7 +924,7 @@
                                      (##quote ,(cdr m))
                                      src))))
                                '())))
-                         (idmap-macros idmap))))))
+                         (idmap-macros idmap)))))
             rev-global-imports))))
 
 (define-runtime-syntax import
@@ -1073,91 +939,21 @@
 (##scheme-file-extensions-set!
  (cons '(".sld" . #f) ##scheme-file-extensions))
 
-(define (parse-libref parts)
-  (define (parse-libref-root host rest)
-    (if (pair? rest)
-      (parse-libref-version 2 host '() (list (car rest)) (cdr rest))
-      (error "Invalid hosted libref")))
-
-  (define (parse-libref-version size host version path rest)
-    (if (> size 0)
-      (if (pair? rest)
-        (parse-libref-version (- size 1) host
-                              (cons (car rest) version) path (cdr rest))
-        (error "Invalid hosted libref"))
-      (parse-libref-path host version path rest)))
-
-  (define (parse-libref-path host version path rest)
-    (if (pair? rest)
-      (parse-libref-path host version (cons (car rest) path) (cdr rest))
-      (make-libref host version path)))
-
-  (if (pair? parts)
-    (let ((host (car parts))
-          (rest (cdr parts)))
-      (if (hostname? host)
-        (if (pair? rest)
-          (parse-libref-root (list (car rest) host) (cdr rest))
-          (error "Invalid hosted libref"))
-        (parse-libref-path '() '() (list host))))))
-
-(define (path->libref path)
-  (parse-libref (path->parts path)))
-
-(define (library-not-found-exception libname)
-  (##raise-module-not-found-exception
-   ;; not sure if I should use this reference...
-   ##load-required-module
-   libname))
-
-(define (load-dynamic-module module-ref)
-  (println-log "Loading " module-ref)
-  (let* ((parts (path->parts module-ref))
-         (fst-part (car parts))
-         (build-version-target
-           (path-expand
-             (##string-append (system-version-string) "@" (##symbol->string (macro-target))) ".builds")))
-
-    (if (hostname? fst-part)
-      (let ((libref (parse-libref parts)))
-        (let ((lib module-ref
-                   #;(apply
-                     path-expand*
-                     (append
-                       (libref-host libref)
-                       (cons
-                         (car (libref-path libref))
-                         (libref-version libref)))))
-
-              (build-path (path-expand
-                              (car (libref-path libref))
-                              ;; FIXME: Should be given by the system.
-                              build-version-target)))
-
-          (println-log "[load] build-path: " build-path)
-
-          ;; TODO: check if it exists.
-          ;; FIXME: use ##load instead
-          (load (path-expand* library-user-location lib build-path))
-          (##load-required-module (##string->symbol (##string-append lib "#")))))
-
-      (let* ((module-root fst-part)
-             (module-build-path (path-expand build-version-target (path-expand module-root library-user-location))))
-        (if (file-exists? (path-expand (string-append fst-part ".o1") module-build-path))
-          (begin
-            (load (path-expand (string-append fst-part ".o1") module-build-path))
-            (##load-required-module (string->symbol (string-append module-ref "#"))))
-          (error (string-append "Package `" module-ref "` not built for target " (##symbol->string (macro-target)))))))))
-
 (##load-required-module-set!
  (lambda (module-ref)
+  (define (library-not-found-exception libname)
+    (##raise-module-not-found-exception
+     ;; not sure if I should use this reference...
+     ##load-required-module
+     libname))
   (cond
     ((##symbol? module-ref)
      (let ((module (##lookup-registered-module module-ref)))
        (if module
          (##load-required-module-structs (##list module) #t)
-         ;; XXX: rethink the name of that function
-         (load-dynamic-module (##symbol->string module-ref)))))
+         (##load-library
+          (##string->libref (##symbol->string module-ref))
+          #t))))
     (else
       (library-not-found-exception module-ref)))))
 
