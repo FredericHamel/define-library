@@ -518,19 +518,6 @@
                         (cons (cons id crules)
                               rev-macros))))))))
 
-  (define (lib-source-filename->namespace filename)
-    (let ((name-space (string-append (path-strip-extension filename) "#")))
-      (let ((namespace-len (string-length name-space)))
-        (let loop ((i 0))
-          (if (< i namespace-len)
-            (case (string-ref name-space i)
-              ((#\/)
-               (string-set! name-space i #\#)
-               (loop (+ i 1)))
-              (else
-                (loop (+ i 1))))
-            name-space)))))
-
   (define (has-suffix? str suffix)
     (let ((str-len (string-length str))
           (suffix-len (string-length suffix)))
