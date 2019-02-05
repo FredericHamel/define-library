@@ -156,20 +156,25 @@
     (split-path 0 '())))
 
 (define (get-libdef name reference-src)
+  (define (err src)
+    (##raise-expression-parsing-exception
+     'cannot-find-library
+     src
+     (##desourcify src)))
+
   (let* ((name-str (parts->path name ""))
          (libref (##string->libref name-str)))
-    (let ((lib (##search-library libref)))
-      (if lib
-        (begin
-          (parameterize ((##compilation-scope (make-table test: eq?)))
-            (table-set! (##compilation-scope) 'library-name
-                        (and (pair? (macro-libref-host libref)) name-str))
-            (read-libdef-sld name reference-src (cdr lib))))
+    (if libref
+        (let ((lib (##search-library libref)))
+          (if lib
+            (begin
+              (parameterize ((##compilation-scope (make-table test: eq?)))
+                (table-set! (##compilation-scope) 'library-name
+                            (and (pair? (macro-libref-host libref)) name-str))
+                (read-libdef-sld name reference-src (cdr lib))))
 
-        (##raise-expression-parsing-exception
-         'cannot-find-library
-         reference-src
-         (##desourcify reference-src))))))
+            (err reference-src)))
+        (err reference-src))))
 
 (define (read-first port)
   (let* ((rt
