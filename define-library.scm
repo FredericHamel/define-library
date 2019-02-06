@@ -6,12 +6,6 @@
 
 ;;;============================================================================
 
-(define-macro (dummy)
-  (table-set! (##compilation-scope) 'module-name "_define-library")
-  (table-set! (##compilation-scope) 'linker-name "_define-library")
-  #f)
-(dummy) ;; Set namespace to _define-library
-
 (##namespace ("dl#"))
 (##include "~~lib/gambit#.scm")
 (##include "~~lib/_gambit#.scm")
@@ -556,6 +550,10 @@
                   (library-name (or (table-ref (##compilation-scope) 'library-name #f)
                                     (table-ref (##compilation-scope) 'module-name #f)
                                     name-str))
+
+                  (dummy (begin
+                           (println "library-name: " library-name)
+                           (println "name-str: " name-str)))
 
                   (libref (##string->libref library-name))
 
