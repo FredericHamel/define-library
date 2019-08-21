@@ -7,11 +7,11 @@ clean:
 .SUFFIXES:
 .SUFFIXES: .o1 .scm .sld
 
+define-library.o1: define-library.scm
+
 .scm.o1:
 	@echo "Compiling $< => $@"
-	@gsc-script -:d- \
-		-module-name _dl \
-		define-library.scm
+	@gsc-script -prelude '(declare(block))' -o $@ $<
 
 .PHONY:
 .PHONY: all clean

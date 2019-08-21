@@ -6,10 +6,13 @@
 
 ;;;============================================================================
 
-(##namespace ("dl#"))
+(##supply-module define-library)
+
+(##namespace ("define-library#"))
+
 (##include "~~lib/gambit#.scm")
 (##include "~~lib/_gambit#.scm")
-(##include "~~lib/_library#.scm")
+(##include "~~lib/_module#.scm")
 ;;;============================================================================
 
 ;; Setup implementation of define-syntax and syntax-rules.
@@ -49,10 +52,13 @@
          )
        ##expression-parsing-exception-names))
 
-(define (lib-name->namespace name)
-  (apply string-append
-         (map (lambda (x) (string-append x "#"))
-              name)))
+
+(define (parts->path parts dir)
+  (if (null? (cdr parts))
+      (##path-expand (car parts) dir)
+      (parts->path (cdr parts) (##path-expand (car parts) dir))))
+
+;;;============================================================================
 
 (define-type idmap
   id: idmap
@@ -70,65 +76,19 @@
   (name-src unprintable:)
   name
   namespace
+  cc-options
+  ld-options
+  pkg-config
   exports
   imports
   body
 )
 
-;; libref defined in _library#.scm
-;;(define-type libref
+;; modref defined in _library#.scm
+;;(define-type modref
 ;;  host        ;; ("github.com" "A") or ()
 ;;  tag         ;; ("tree" "1.0.0") or ()
 ;;  path)       ;; ("B" "C" "D")
-
-(define (has-prefix? str prefix)
-  (and (string? str)
-       (string? prefix)
-       (let ((len-str (string-length str))
-             (len-prefix (string-length prefix)))
-         (and (>= len-str len-prefix)
-              (string=? (substring str 0 len-prefix) prefix)
-              (substring str len-prefix len-str)))))
-
-;; Test if a valid hostname
-(define (hostname? name)
-  ; [A-Za-z0-9]
-  (define (alphanum-ci? c)
-    (or (and (char>=? c #\A) (char<=? #\Z))
-        (and (char>=? c #\a) (char<=? #\z))
-        (and (char>=? c #\0) (char<=? #\9))))
-
-  (define (parse-segment-start name num-segment index name-len)
-    (and (< index name-len)
-      (let ((c (string-ref name index)))
-        (and
-          (alphanum-ci? c)
-          (parse-segment name num-segment (+ index 1) name-len)))))
-
-  (define (parse-segment name num-segment index name-len)
-    (let loop ((i index)
-               (last-alphanum? #t))
-      (if (< i name-len)
-        (let ((c (string-ref name i)))
-          (cond
-            ((char=? c #\-)
-             (loop (+ i 1) #f))
-
-            ((char=? c #\.)
-             (and last-alphanum?
-                  (parse-segment-start name (+ num-segment 1) (+ i 1) name-len)))
-
-            ((alphanum-ci? c)
-             (loop (+ i 1) #t))
-
-            (else
-              ;; Character not allowed
-              #f)))
-
-        (> num-segment 0))))
-
-  (let ((name-len (string-length name)))
-    (parse-segment-start name 0 0 name-len)))
 
 (define (path->parts path)
   (let ((path-len (string-length path)))
@@ -149,74 +109,72 @@
                 rev-result)))))
     (split-path 0 '())))
 
-(define (get-libdef name reference-src)
+(define (get-libdef modref modref-str reference-src)
   (define (err src)
     (##raise-expression-parsing-exception
      'cannot-find-library
      src
      (##desourcify src)))
 
-  (let* ((name-str (parts->path name ""))
-         (libref (##string->libref name-str)))
-    (if libref
-        (let ((lib (##search-library libref)))
-          (if lib
-            (begin
-              (parameterize ((##compilation-scope (make-table test: eq?)))
-                (table-set! (##compilation-scope) 'library-name
-                            (and (pair? (macro-libref-host libref)) name-str))
-                (read-libdef-sld name reference-src (cdr lib))))
+  (let ((mod-info (or (##search-module modref)
+                      (and (##install-module modref)
+                           (##search-module modref)))))
+    (if mod-info
+      (let ((mod-dir            (##vector-ref mod-info 0))
+            (mod-filename-noext (##vector-ref mod-info 1))
+            (ext                (##vector-ref mod-info 2))
+            (mod-path           (##vector-ref mod-info 3))
+            (port               (##vector-ref mod-info 4))
+            (root               (##vector-ref mod-info 5))
+            (path               (##vector-ref mod-info 6)))
 
-            (err reference-src)))
-        (err reference-src))))
+        ;(##display (##vector-copy mod-info) ##stdout-port)
+        ;(##newline ##stdout-port)
+
+        (read-libdef-sld mod-path
+                         reference-src
+                         modref-str
+                         port
+                         root
+                         path))
+      (err reference-src))))
 
 (define (read-first port)
   (let* ((rt
           (##readtable-copy-shallow (##current-readtable)))
          (re
-          (##make-readenv port rt ##wrap-datum ##unwrap-datum #f #f))
+          (##make-readenv port rt ##wrap-datum ##unwrap-datum #f '() #f))
          (first
           (##read-datum-or-eof re)))
     (close-input-port port)
     first))
 
 
-(define (read-libdef-sld name reference-src port)
-  (parse-define-library (read-first port)))
+(define (read-libdef-sld name reference-src import-name port
+                         module-root modref-path)
+  (let ((src (read-first port)))
+    (if (eof-object? src)
+      (##raise-expression-parsing-exception
+       'define-library-expected
+       (##make-source src `#(,(string->symbol name))))
+      (parse-define-library src import-name module-root modref-path))))
 
-(define (read-libdef-scm name reference-src port)
-  (parse-define-library (read-first port)))
+(define (read-libdef-scm name reference-src import-name port)
+  (parse-define-library (read-first port) import-name #f #f))
 
 ;; Toggle logging
-(define debug-mode #f)
-
-(define library-user-location
-  ;; userlib
-  (path-expand (##os-path-gambitdir-map-lookup "userlib")))
-
-(define library-locations
-  (list #f        ;; #f means relative to source file
-;        ""        ;; "" means current directory
-        library-user-location
-        "~~lib")) ;; lib directory in Gambit installation directory
+(define debug-mode? #f)
+(define debug-mode?-set!
+  (lambda (x)
+    (set! debug-mode? x)))
 
 (define library-kinds #f)
 (set! library-kinds
       (list
-
        (cons ".sld"
              (vector read-libdef-sld))
        (cons ".scm"
              (vector read-libdef-scm))))
-
-(define (println-log . msg)
-  (if debug-mode
-    (apply println msg)))
-
-(define (parts->path parts dir)
-  (if (null? (cdr parts))
-      (##path-expand (car parts) dir)
-      (parts->path (cdr parts) (##path-expand (car parts) dir))))
 
 (define (read-file-as-a-begin-expr lib-decl-src filename-src)
   (let ((filename (##source-strip filename-src)))
@@ -253,6 +211,10 @@
        'ill-formed-library-name
        name-src))
 
+    ;; Test if part is invalid
+    (define (invalid-part? part)
+      (char=? #\/ (string-ref part (- (string-length part) 1))))
+
     (define (parse-parts lst)
       (let loop ((lst lst) (rev-parts '()))
         (cond ((null? lst)
@@ -260,8 +222,11 @@
               ((pair? lst)
                (let ((x (car lst)))
                  (cond ((symbol? x)
-                        (loop (cdr lst)
-                              (cons (symbol->string x) rev-parts)))
+                        (let ((part (symbol->string x)))
+                          (if (invalid-part? part)
+                            (library-name-err)
+                            (loop (cdr lst)
+                                  (cons part rev-parts)))))
                        ((and (integer? x)
                              (exact? x)
                              (>= x 0))
@@ -277,12 +242,15 @@
           (let ((head (car spec)))
             (if (memq head '(rename prefix only except))
                 (library-name-err) ;; conflict with import declaration syntax
-                (let ((repo-parts (path->parts (symbol->string head))))
-                  (if repo-parts
-                      (append repo-parts (parse-parts (cdr spec)))
-                      (parse-parts spec))))))))
+                (let ((head-str (symbol->string head)))
+                  (if (invalid-part? head-str)
+                    (library-name-err)
+                    (let ((repo-parts (path->parts head-str)))
+                      (if repo-parts
+                          (append repo-parts (parse-parts (cdr spec)))
+                          (parse-parts spec))))))))))
 
-(define (parse-define-library src)
+(define (parse-define-library src modref-str module-root modref-path)
 
   (define-type ctx
     id: ctx
@@ -292,6 +260,9 @@
     namespace
     exports-tbl
     imports-tbl
+    rev-pkg-config
+    rev-cc-options
+    rev-ld-options
     rev-imports
     rev-body
   )
@@ -350,6 +321,48 @@
                           ctx
                           (##source-strip (car args-srcs)))
                          (parse-body ctx rest-srcs))))
+
+                  ((pkg-config)
+                   (if (not (and (pair? args-srcs)
+                                 (string? (##source-strip (car args-srcs)))))
+                     (library-decl-err)
+                     (begin
+                       (ctx-rev-pkg-config-set!
+                         ctx
+                         (parse-string-args
+                           (cons
+                             (##source-strip (car args-srcs))
+                             (ctx-rev-pkg-config ctx))
+                           (cdr args-srcs) library-decl-err))
+                       (parse-body ctx rest-srcs))))
+
+                  ((cc-options)
+                   (if (not (and (pair? args-srcs)
+                                 (string? (##source-strip (car args-srcs)))))
+                     (library-decl-err)
+                     (begin
+                       (ctx-rev-cc-options-set!
+                         ctx
+                         (parse-string-args
+                           (cons
+                             (##source-strip (car args-srcs))
+                             (ctx-rev-cc-options ctx))
+                           (cdr args-srcs) library-decl-err))
+                       (parse-body ctx rest-srcs))))
+
+                  ((ld-options)
+                   (if (not (and (pair? args-srcs)
+                                 (string? (##source-strip (car args-srcs)))))
+                     (library-decl-err)
+                     (begin
+                       (ctx-rev-ld-options-set!
+                         ctx
+                         (parse-string-args
+                           (cons
+                             (##source-strip (car args-srcs))
+                             (ctx-rev-ld-options ctx))
+                           (cdr args-srcs) library-decl-err))
+                       (parse-body ctx rest-srcs))))
 
                   (else
                    (library-decl-err))))
@@ -454,7 +467,7 @@
         (let* ((import-set-src (car import-sets-srcs))
                (rest-srcs (cdr import-sets-srcs))
                ;;; Why ctx in parse-import-set? Cause not used...
-               (idmap (parse-import-set import-set-src (parts->path (ctx-name ctx) ""))))
+               (idmap (parse-import-set import-set-src (ctx-name ctx))))
           (add-imports! ctx import-set-src idmap)
           (parse-import-decl ctx rest-srcs))))
 
@@ -512,6 +525,15 @@
                         (cons (cons id crules)
                               rev-macros))))))))
 
+  (define (parse-string-args base args-srcs err)
+    (if (pair? args-srcs)
+      (let ((args (##source-strip (car args-srcs)))
+            (rest-srcs (cdr args-srcs)))
+        (if (string? args)
+          (parse-string-args (cons args base) rest-srcs err)
+          (err)))
+      base))
+
   (define (has-suffix? str suffix)
     (let ((str-len (string-length str))
           (suffix-len (string-length suffix)))
@@ -520,14 +542,12 @@
              suffix
              (substring str (- str-len suffix-len) str-len)))))
 
-  (define (join-rev parts dir)
-    (if (pair? parts)
+  (define (join-rev path lst)
+    (if (pair? lst)
       (join-rev
-        (cdr parts)
-        (path-expand
-          (car parts) ; B
-          dir)) ; C -> C/B
-      dir))
+        (path-expand path (car lst))
+        (cdr lst))
+      path))
 
   (let ((form (##source-strip src)))
     (if (not (and (pair? form)
@@ -541,40 +561,78 @@
          src
          -2
          (lambda (name-src . body-srcs)
-           (let* ((name
-                   (parse-name name-src))
+           (let* ((module-ref (or modref-str (table-ref (##compilation-scope) '##module-ref #f)))
+                  (module-root (table-ref (##compilation-scope) '##module-root module-root))
+                  (modref-path (table-ref (##compilation-scope) '##modref-path modref-path))
 
-                  (name-str (parts->path name ""))
+                  (_ (if debug-mode?
+                       (begin
+                         (display "module-ref: ")
+                         (display module-ref)
+                         (newline)
+                         (display "module-root: ")
+                         (display module-root)
+                         (newline)
+                         (display "modref-path: ")
+                         (display modref-path)
+                         (newline))))
 
-                  ;; Name it is imported or compiled with.
-                  (library-name (or (table-ref (##compilation-scope) 'library-name #f)
-                                    (table-ref (##compilation-scope) 'module-name #f)
-                                    name-str))
+                  ;; ("A" "B" "C")
+                  (name-default
+                    (parse-name name-src))
 
-                  (dummy (begin
-                           (println "library-name: " library-name)
-                           (println "name-str: " name-str)))
+                  ;; "A/B/C"
+                  (name-default-string (parts->path name-default ""))
 
-                  (libref (##string->libref library-name))
+                  (library-name (if module-ref
+                                  (cond
+                                    ((symbol? module-ref)
+                                     (##symbol->string module-ref))
+                                    (else module-ref))
+                                  name-default-string))
 
-                  (valid? (or
-                            (null? (macro-libref-host libref))
-                            (has-suffix?
-                              (join-rev (macro-libref-path libref) "")
-                              name-str)))
+                  (modref (##string->modref library-name))
+
+                  ;; Test if modref-path == .../ + name-default-string
+                  (valid? (if (null? (macro-modref-host modref))
+                            (string=? library-name name-default-string)
+                            (let ((mod-path (macro-modref-path modref)))
+                              (has-suffix?
+                                (join-rev (car mod-path) (cdr mod-path))
+                                name-default-string))))
 
                   (ctx
                    (make-ctx src
                              name-src
-                             name
-                             (if valid?
-                               (##libref->string libref #t)
-                               (error "Invalid namespace"))
+                             library-name
+                             (if valid? ; namespace
+                               (##modref->string modref #t)
+                               (##raise-expression-parsing-exception
+                                'invalid-module-name
+                                name-src))
                              (make-table test: eq?)
                              (make-table test: eq?)
+                             '() ; rev-pkg-config
+                             '() ; rev-cc-options
+                             '() ; rev-ld-options
                              '()
                              '())))
-             (parse-body ctx body-srcs)
+
+             (if debug-mode?
+               (let ()
+                 (println "parse-define-library==>compilation-scope: " (object->string (table->list (##compilation-scope))))
+                 (println "parse-define-library==>module-ref: " module-ref)
+                 (println "parse-define-library==>modref-str: " modref-str)
+                 (println "parse-define-library==>library-name: " library-name)
+                 (println)))
+
+             ;; parse-body modify ctx
+             (parameterize ((##module-aliases (##module-aliases)))
+               (##extend-aliases-from-rpath
+                modref-path
+                module-root)
+
+               (parse-body ctx body-srcs))
 
              (let* ((body (reverse (ctx-rev-body ctx)))
                     (macros (parse-macros ctx body))
@@ -584,6 +642,10 @@
                 (ctx-name-src ctx)
                 (ctx-name ctx)
                 (ctx-namespace ctx)
+
+                (reverse! (ctx-rev-cc-options ctx))
+                (reverse! (ctx-rev-ld-options ctx))
+                (reverse! (ctx-rev-pkg-config ctx))
 
                 (make-idmap
                  (ctx-src ctx)
@@ -598,7 +660,7 @@
 
                 body))))))))
 
-(define (parse-import-set import-set-src #!optional (ctx-library #f))
+(define (parse-import-set import-set-src #!optional (ctx-library? #f))
   (let ((import-set (##source-strip import-set-src)))
 
     (define (import-set-err)
@@ -611,14 +673,14 @@
        'ill-formed-library-name
        import-set-src))
 
-    (define (count-point str)
+    (define (count-dot str)
       (let ((len (string-length str)))
         (let loop ((i 0))
           (if (< i len)
             (case (string-ref str i)
               ((#\.) (loop (+ i 1)))
               (else i))
-            (or ctx-library
+            (or ctx-library?
                 ;; only in global import.
                 (ill-formed-library-name))))))
 
@@ -647,11 +709,11 @@
 
           (if (not (pair? args-srcs))
             (import-set-err)
-            (let ((idmap (parse-import-set (car args-srcs) ctx-library)))
+            (let ((idmap (parse-import-set (car args-srcs) ctx-library?)))
               (case head
 
                 ((rename)
-                 (let ((idmap (parse-import-set (car args-srcs) ctx-library)))
+                 (let ((idmap (parse-import-set (car args-srcs) ctx-library?)))
                    (let loop ((lst (cdr args-srcs)) (renames '()))
                      (cond ((null? lst)
                             (make-idmap
@@ -749,39 +811,50 @@
 
           (let* ((name
                    (parse-name import-set-src))
-                 (path (parts->path name ""))
-                 (updir-count (count-point path))
-                 (import-name (if ctx-library
-                                (if (> updir-count 0)
-                                  (path->parts
-                                    (path-expand
-                                      (substring path updir-count (string-length path))
-                                      (macro-string-not-empty
-                                        (path-directory* ctx-library (- updir-count 1))
-                                        ill-formed-library-name)))
-                                  name)
-                                ;; Forbid global (import (..foo))
-                                (if (> updir-count 0)
-                                  (ill-formed-library-name)
-                                  name)))
 
-                 (name-with-symbols
-                   (map string->symbol import-name))
+                 (path (parts->path name ""))
+
+                 (updir-count (count-dot path))
+
+                 (import-name-path
+                   (if ctx-library?
+                     (if (> updir-count 0)
+                       (path-expand
+                         (substring path updir-count (string-length path))
+                         (macro-string-not-empty
+                           (path-directory* ctx-library? (- updir-count 1))
+                           ill-formed-library-name))
+                       path)
+
+                     ;; Forbid global (import (..foo)) out of library context
+                     (if (> updir-count 0)
+                       (ill-formed-library-name)
+                       path)))
+
+                 (modref-alias (let ((modref (##string->modref import-name-path)))
+                                 ;(if modref
+                                    (##apply-module-alias modref)
+
+                                    #;(##raise-expression-parsing-exception
+                                     'ill-formed-import-set
+                                     import-set-src
+                                     (##desourcify import-set-src))))
+
+                 (modref-alias-str (##modref->string modref-alias))
+
                  (ld
-                   (get-libdef import-name import-set-src)))
+                     (get-libdef modref-alias modref-alias-str import-set-src)))
+
             (make-idmap
               import-set-src
               import-set-src
-              import-name
+              modref-alias-str
               (libdef-namespace ld)
               (idmap-macros (libdef-exports ld))
               (and (null? (libdef-body ld)) (null? (libdef-imports ld)))
               (idmap-map (libdef-exports ld))))))
 
       (import-set-err))))
-
-(define (import->symbolic-string name)
-  (parts->path name ""))
 
 (define (print-and-return src)
   (for-each
@@ -790,46 +863,37 @@
     (cdr (##desourcify src)))
   src)
 
-(define (resolve-relative-path filename)
-  (let loop ((paths library-locations))
-    (and
-      (pair? paths)
-      (let* ((prefix (or (car paths) (current-directory)))
-             (result
-              (has-prefix?
-                filename
-                (if (car paths)
-                  (path-expand (car paths))
-                  (current-directory)))))
-        (or result
-          (loop (cdr paths)))))))
-
 (define (define-library-expand src)
-  (let* ((ld (parse-define-library src))
+  (let* ((ld (parse-define-library src #f #f #f))
          (ld-imports
            (map (lambda (x)
                   (let* ((idmap (vector-ref x 0))
                          (imports (vector-ref x 1)))
-                         ;; TODO: Reimplement relative import.
-                         ;(from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
 
                     `(##begin
-                      ;; TODO: Detect host library import
-                      ,(let ((symbol-name (string->symbol (import->symbolic-string (idmap-name idmap)))))
-                         ;; Special library
-                         (if (idmap-only-export? idmap)
-                           `(##begin)
-                           `(##require-module ,symbol-name)))
 
-                      ,@(if (null? imports)
-                          '()
-                          `((##namespace
-                             (,(idmap-namespace idmap)
-                               ,@(map (lambda (i)
-                                        (if (eq? (car i) (cdr i))
-                                          (car i)
-                                          (list (cdr i) (car i))))
-                                      (table->list imports))))))
+                      ,@(let ((name-symbol (string->symbol (idmap-name idmap))))
+                         ;; Special library
+                         (if debug-mode?
+                           (let ()
+                             (println "define-library-expand==>name: " (object->string (idmap-name idmap)))
+                             (println "define-library-expand==>namespace: " (idmap-namespace idmap))
+                             (println)))
+
+                         (if (idmap-only-export? idmap)
+                           `()
+                           `((##demand-module ,name-symbol))))
+
+                      ,@(let ((imports-list (table->list imports)))
+                          (if (null? imports-list)
+                            '()
+                            `((##namespace
+                               (,(idmap-namespace idmap)
+                                 ,@(map (lambda (i)
+                                          (if (eq? (car i) (cdr i))
+                                            (car i)
+                                            (list (cdr i) (car i))))
+                                        imports-list))))))
 
                       ,@(apply
                           append
@@ -837,10 +901,6 @@
                                  (let ((id (car m)))
                                    (if (table-ref imports id #f) ;; macro is imported?
                                      `((##define-syntax
-                                        ,(string->symbol
-                                           (string-append
-                                             (idmap-namespace idmap)
-                                             (symbol->string id)))
                                         (##lambda (src)
                                          (syn#apply-rules
                                            (##quote ,(cdr m))
@@ -849,13 +909,32 @@
                                (idmap-macros idmap))))))
 
                 (libdef-imports ld))))
+
+    (if debug-mode?
+      (let ()
+        (println "define-library-expand==>libdef-name: " (object->string (libdef-name ld)))
+        (println "define-library-expand==>libdef-namespace: " (libdef-namespace ld))
+        (println)))
+
     (##expand-source-template
      src
      (if (null? ld-imports)
-       (if (null? (libdef-body ld))
-         `(##begin) ;; empty library
-         (error "Cannot have body"))
+       `(##begin) ;; empty library
        `(##begin
+         (##supply-module ,(string->symbol (libdef-name ld)))
+         ,@(let ((build-options-arguments
+                  `(,@(if (null? (libdef-cc-options ld))
+                        `()
+                        `((cc-options ,(libdef-cc-options ld))))
+                     ,@(if (null? (libdef-ld-options ld))
+                         '()
+                         `((ld-options ,(libdef-ld-options ld))))
+                     ,@(if (null? (libdef-pkg-config ld))
+                         '()
+                         `((pkg-config ,(libdef-pkg-config ld)))))))
+            (if (null? build-options-arguments)
+              '()
+              `((##quote (##build-options ,@build-options-arguments)))))
          (##namespace (,(libdef-namespace ld)))
          ,@ld-imports
          ,@(libdef-body ld)
@@ -865,6 +944,37 @@
   ;; Local ctx
   (define rev-global-imports '())
 
+  (define (directory-separator? pattern pos)
+    (char=? (string-ref pattern pos) #\/))
+
+  (if debug-mode?
+    (begin
+      (display "module-ref: ")
+      (display (##table-ref (##compilation-scope) '##module-ref #f))
+      (newline)
+      (display "module-root: ")
+      (display (##table-ref (##compilation-scope) '##module-root #f))
+      (newline)
+      (display "modref-path: ")
+      (display (##table-ref (##compilation-scope) '##modref-path #f))
+      (newline)))
+
+  (let* ((locat (##source-locat src))
+         (locat-filename (and (##vector? locat) (##vector-ref locat 0)))
+         (rpath-root (if (or (##not locat-filename) ;; locat-filename is #f
+                             (and (##pair? locat-filename)
+                                  (##eq? (##car locat-filename) 'console)))
+                       (##vector
+                        '()
+                        (##current-directory))
+                       (##vector
+                        (##table-ref (##compilation-scope) 'modref-path '())
+                        (##table-ref (##compilation-scope) 'module-root (##path-directory locat-filename))))))
+    ;; Clone alias environment.
+    (parameterize ((##module-aliases (##module-aliases)))
+      (##extend-aliases-from-rpath
+       (##vector-ref rpath-root 0)
+       (##vector-ref rpath-root 1))
   (##deconstruct-call
    src
    -2
@@ -879,26 +989,31 @@
    src
    `(##begin
      ,@(map (lambda (idmap)
-              ;; Relative import within module (not completed yet)
-
-              ;(let ((from-file (resolve-relative-path (##vector-ref (##source-locat (idmap-src idmap)) 0))))
 
               `(##begin
 
                 ;; Imports dynamic (for functions)
-                ,(let ((symbol-name (string->symbol (import->symbolic-string (idmap-name idmap)))))
+                ,(let ((symbol-name (string->symbol (idmap-name idmap))))
                    ;; Special library
+                   (if debug-mode?
+                     (let ()
+                       (println "import-expand==>import: " symbol-name)
+                       (println "import-expand==>namespace: " (idmap-namespace idmap))
+                       (println)))
+
                    (if (idmap-only-export? idmap)
                      `(##begin)
-                     `(##require-module ,symbol-name)))
+                     `(##demand-module ,symbol-name)))
 
-                (##namespace
-                 (,(idmap-namespace idmap)
-                   ,@(map (lambda (i)
-                            (if (eq? (car i) (cdr i))
-                              (car i)
-                              (list (car i) (cdr i))))
-                          (idmap-map idmap))))
+
+                ,@(if (pair? (idmap-map idmap))
+                   `((##namespace (,(idmap-namespace idmap)
+                      ,@(map (lambda (i)
+                               (if (eq? (car i) (cdr i))
+                                 (car i)
+                                 (list (car i) (cdr i))))
+                             (idmap-map idmap)))))
+                   '())
 
                 ;; Macro Handler !!!
                 ,@(apply
@@ -917,36 +1032,12 @@
                                      src))))
                                '())))
                          (idmap-macros idmap)))))
-            rev-global-imports))))
+            rev-global-imports))))))
 
 (define-runtime-syntax import
    import-expand)
 
 (define-runtime-syntax define-library
   define-library-expand)
-
-;; register-loader
-
-;; Add .sld
-(##scheme-file-extensions-set!
- (cons '(".sld" . #f) ##scheme-file-extensions))
-
-(##load-required-module-set!
- (lambda (module-ref)
-  (define (library-not-found-exception libname)
-    (##raise-module-not-found-exception
-     ;; not sure if I should use this reference...
-     ##load-required-module
-     libname))
-  (cond
-    ((##symbol? module-ref)
-     (let ((module (##lookup-registered-module module-ref)))
-       (if module
-         (##load-required-module-structs (##list module) #t)
-         (##load-library
-          (##string->libref (##symbol->string module-ref))
-          #t))))
-    (else
-      (library-not-found-exception module-ref)))))
 
 ;;;============================================================================
