@@ -4,6 +4,9 @@ all: define-library.o1
 clean:
 	rm -f define-library.o1
 
+run: all
+	gsi define-library -
+
 .SUFFIXES:
 .SUFFIXES: .o1 .scm .sld
 
@@ -14,5 +17,5 @@ define-library.o1: define-library.scm
 	@gsc-script -prelude '(declare(block))' -o $@ $<
 
 .PHONY:
-.PHONY: all clean
+.PHONY: all clean run
 
