@@ -54,8 +54,8 @@
 
 
 (define (parts->path parts dir)
-  (if (null? (cdr parts))
-      (##path-expand (car parts) dir)
+  (if (null? parts)
+      dir
       (parts->path (cdr parts) (##path-expand (car parts) dir))))
 
 ;;;============================================================================
@@ -242,7 +242,10 @@
           (let ((head (car spec)))
             (if (memq head '(rename prefix only except))
                 (library-name-err) ;; conflict with import declaration syntax
-                (let ((head-str (symbol->string head)))
+                (let ((modref (##parse-module-ref spec)))
+                  (or modref (library-name-err)))
+
+                #;(let ((head-str (symbol->string head)))
                   (if (invalid-part? head-str)
                     (library-name-err)
                     (let ((repo-parts (path->parts head-str)))
@@ -578,11 +581,26 @@
                          (newline))))
 
                   ;; ("A" "B" "C")
-                  (name-default
+                  (dot-and-modref
                     (parse-name name-src))
 
+                  (name-default (if (> 0 (car dot-and-modref))
+                                    (##raise-expression-parsing-exception
+                                      'invalid-module-name
+                                      name-src)
+                                    (cdr dot-and-modref)))
+
+                  #;(_ (begin
+                       (display "[597] name-default: ")
+                       (display (##vector-copy name-default))
+                       (newline)
+
+                       (display "[601] module-ref: ")
+                       (display module-ref)
+                       (newline)))
+
                   ;; "A/B/C"
-                  (name-default-string (parts->path name-default ""))
+                  (name-default-string (##modref->string name-default))
 
                   (library-name (if module-ref
                                   (cond
@@ -660,7 +678,7 @@
 
                 body))))))))
 
-(define (parse-import-set import-set-src #!optional (ctx-library? #f))
+(define (parse-import-set import-set-src #!optional (ctx-library #f))
   (let ((import-set (##source-strip import-set-src)))
 
     (define (import-set-err)
@@ -679,10 +697,7 @@
           (if (< i len)
             (case (string-ref str i)
               ((#\.) (loop (+ i 1)))
-              (else i))
-            (or ctx-library?
-                ;; only in global import.
-                (ill-formed-library-name))))))
+              (else i)) i))))
 
 
     (define (path-directory* dir num)
@@ -709,11 +724,11 @@
 
           (if (not (pair? args-srcs))
             (import-set-err)
-            (let ((idmap (parse-import-set (car args-srcs) ctx-library?)))
+            (let ((idmap (parse-import-set (car args-srcs) ctx-library)))
               (case head
 
                 ((rename)
-                 (let ((idmap (parse-import-set (car args-srcs) ctx-library?)))
+                 (let ((idmap (parse-import-set (car args-srcs) ctx-library)))
                    (let loop ((lst (cdr args-srcs)) (renames '()))
                      (cond ((null? lst)
                             (make-idmap
@@ -809,29 +824,46 @@
                       (idmap-only-export? idmap)
                       (keep only-keep (idmap-map idmap))))))))
 
-          (let* ((name
+          (let* (;; TODO: remove parse-name here.
+                 #;(name
                    (parse-name import-set-src))
+                 #;(name-start (car name))
 
-                 (path (parts->path name ""))
+                 (dot-and-modref (parse-name import-set-src))
 
-                 (updir-count (count-dot path))
+                 (updir-count (car dot-and-modref))
+
+                 (modstr (##modref->string (cdr dot-and-modref)))
+                 #;(path (parts->path (cdr name)
+                                    (if (= (string-length name-start) updir-count)
+                                        ""
+                                        (substring name-start updir-count (string-length name-start)))))
+
+                 #;(_ (begin
+                      (display "[850] modstr: ")
+                      (display modstr)
+                      (newline)
+
+                      (display "[854] ctx-library: ")
+                      (display ctx-library)
+                      (newline)))
 
                  (import-name-path
-                   (if ctx-library?
+                   (if ctx-library
                      (if (> updir-count 0)
                        (path-expand
-                         (substring path updir-count (string-length path))
+                         modstr
                          (macro-string-not-empty
-                           (path-directory* ctx-library? (- updir-count 1))
+                           (path-directory* ctx-library (- updir-count 1))
                            ill-formed-library-name))
-                       path)
+                       modstr)
 
                      ;; Forbid global (import (..foo)) out of library context
-                     (if (> updir-count 0)
+                     (if (> updir-count 0) ;; TODO: look at this
                        (ill-formed-library-name)
-                       path)))
+                       modstr)))
 
-                 (modref-alias (let ((modref (##string->modref import-name-path)))
+                 (modref-alias (let ((modref (##string->modref import-name-path))) ;; XXX: may bug in near future
                                  ;(if modref
                                     (##apply-module-alias modref)
 
@@ -925,13 +957,13 @@
          ,@(let ((build-options-arguments
                   `(,@(if (null? (libdef-cc-options ld))
                         `()
-                        `((cc-options ,(libdef-cc-options ld))))
+                        `((cc-options ,@(libdef-cc-options ld))))
                      ,@(if (null? (libdef-ld-options ld))
                          '()
-                         `((ld-options ,(libdef-ld-options ld))))
+                         `((ld-options ,@(libdef-ld-options ld))))
                      ,@(if (null? (libdef-pkg-config ld))
                          '()
-                         `((pkg-config ,(libdef-pkg-config ld)))))))
+                         `((pkg-config ,@(libdef-pkg-config ld)))))))
             (if (null? build-options-arguments)
               '()
               `((##quote (##build-options ,@build-options-arguments)))))
